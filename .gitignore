@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+backend/venv/
+.env
+*.db
+crosspanel.db
+
+# Node
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+
+# CrossPanel Data & Projects
+data/
+data/projects/
+data/playbooks/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
