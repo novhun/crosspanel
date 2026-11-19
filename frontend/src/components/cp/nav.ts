@@ -1,7 +1,8 @@
-import { Home, Boxes, Database, Rocket, SquareTerminal, Globe, Workflow, ShieldCheck, FolderOpen, Settings, Info, PanelsTopLeft, ServerCog, Archive, Users, Clock, FileText, Bot } from "lucide-react";
+import { Home, Boxes, Container, Database, Rocket, SquareTerminal, Globe, Workflow, ShieldCheck, FolderOpen, Settings, Info, PanelsTopLeft, ServerCog, Archive, Users, Clock, FileText, Bot } from "lucide-react";
 export const mainNav = [
   { title: "Dashboard", url: "/", icon: Home },
   { title: "Applications", url: "/applications", icon: Boxes },
+  { title: "Docker", url: "/docker", icon: Container },
   { title: "Website", url: "/website", icon: PanelsTopLeft },
   { title: "Service", url: "/service", icon: ServerCog },
   { title: "Databases", url: "/databases", icon: Database },

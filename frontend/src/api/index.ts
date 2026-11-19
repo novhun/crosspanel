@@ -4,3 +4,4 @@ export * from "./service.api";
 export * from "./deploy.api";
 export * from "./tunnel.api";
 export * from "./database.api";
+export * from "./docker.api";

@@ -18,6 +18,7 @@ import { Route as BackupsRouteImport } from './routes/backups'
 import { Route as CronRouteImport } from './routes/cron'
 import { Route as DatabasesRouteImport } from './routes/databases'
 import { Route as DeploymentsRouteImport } from './routes/deployments'
+import { Route as DockerRouteImport } from './routes/docker'
 import { Route as FilesRouteImport } from './routes/files'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as SecurityRouteImport } from './routes/security'
@@ -74,6 +75,11 @@ const DatabasesRoute = DatabasesRouteImport.update({
 const DeploymentsRoute = DeploymentsRouteImport.update({
   id: '/deployments',
   path: '/deployments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DockerRoute = DockerRouteImport.update({
+  id: '/docker',
+  path: '/docker',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FilesRoute = FilesRouteImport.update({
@@ -148,6 +154,7 @@ export interface FileRoutesByFullPath {
   '/cron': typeof CronRoute
   '/databases': typeof DatabasesRoute
   '/deployments': typeof DeploymentsRoute
+  '/docker': typeof DockerRoute
   '/files': typeof FilesRoute
   '/logs': typeof LogsRoute
   '/security': typeof SecurityRoute
@@ -171,6 +178,7 @@ export interface FileRoutesByTo {
   '/cron': typeof CronRoute
   '/databases': typeof DatabasesRoute
   '/deployments': typeof DeploymentsRoute
+  '/docker': typeof DockerRoute
   '/files': typeof FilesRoute
   '/logs': typeof LogsRoute
   '/security': typeof SecurityRoute
@@ -195,6 +203,7 @@ export interface FileRoutesById {
   '/cron': typeof CronRoute
   '/databases': typeof DatabasesRoute
   '/deployments': typeof DeploymentsRoute
+  '/docker': typeof DockerRoute
   '/files': typeof FilesRoute
   '/logs': typeof LogsRoute
   '/security': typeof SecurityRoute
@@ -220,6 +229,7 @@ export interface FileRouteTypes {
     | '/cron'
     | '/databases'
     | '/deployments'
+    | '/docker'
     | '/files'
     | '/logs'
     | '/security'
@@ -243,6 +253,7 @@ export interface FileRouteTypes {
     | '/cron'
     | '/databases'
     | '/deployments'
+    | '/docker'
     | '/files'
     | '/logs'
     | '/security'
@@ -266,6 +277,7 @@ export interface FileRouteTypes {
     | '/cron'
     | '/databases'
     | '/deployments'
+    | '/docker'
     | '/files'
     | '/logs'
     | '/security'
@@ -290,6 +302,7 @@ export interface RootRouteChildren {
   CronRoute: typeof CronRoute
   DatabasesRoute: typeof DatabasesRoute
   DeploymentsRoute: typeof DeploymentsRoute
+  DockerRoute: typeof DockerRoute
   FilesRoute: typeof FilesRoute
   LogsRoute: typeof LogsRoute
   SecurityRoute: typeof SecurityRoute
@@ -367,6 +380,13 @@ declare module '@tanstack/react-router' {
       path: '/deployments'
       fullPath: '/deployments'
       preLoaderRoute: typeof DeploymentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docker': {
+      id: '/docker'
+      path: '/docker'
+      fullPath: '/docker'
+      preLoaderRoute: typeof DockerRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/files': {
@@ -466,6 +486,7 @@ const rootRouteChildren: RootRouteChildren = {
   CronRoute: CronRoute,
   DatabasesRoute: DatabasesRoute,
   DeploymentsRoute: DeploymentsRoute,
+  DockerRoute: DockerRoute,
   FilesRoute: FilesRoute,
   LogsRoute: LogsRoute,
   SecurityRoute: SecurityRoute,
