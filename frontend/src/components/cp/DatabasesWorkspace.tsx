@@ -9,6 +9,7 @@ import { AppVersionActions } from "./AppVersionActions";
 import { DemoEditor, type DemoRow } from "./DemoEditor";
 import { PageHeader, Pill, inputCls } from "./ui";
 import { databaseEngineDefaults, databaseRows, validateDatabaseEngine, validateDatabaseRecord, type DatabaseEngine } from "./database-data";
+import { databaseApi } from "@/api/database.api";
 
 type Snapshot = { id: number; name: string; engine: string; time: string; size: string };
 const sampleSizes: Record<string, number> = { wp_production: 248, api_core: 86, analytics: 412, shop_db: 124 };
@@ -37,7 +38,39 @@ export function DatabasesWorkspace() {
     <Tabs value={tab} onValueChange={setTab}><TabsList className="mb-6 h-auto w-full justify-start gap-1 rounded-none border-b border-border bg-transparent p-0 pb-2"><TabsTrigger value="configuration" className="gap-2"><Database className="size-4" />Databases</TabsTrigger><TabsTrigger value="installation" className="gap-2"><Download className="size-4" />Installation</TabsTrigger><TabsTrigger value="backups" className="gap-2"><Archive className="size-4" />Backups</TabsTrigger></TabsList>
       <TabsContent value="configuration"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="font-semibold">Database engines</h2><Button size="sm" variant="ghost" onClick={() => setTab("installation")}><Plus />Install engine</Button></div><div className="mb-8 grid gap-4 xl:grid-cols-3">{engines.map((engine) => <article key={engine.name} aria-label={`${engine.name} engine`} className="min-w-0 rounded-lg border border-border bg-card p-4"><div className="flex items-start gap-3"><div className={`grid size-10 shrink-0 place-items-center rounded-lg ${engine.name === "MariaDB" ? "bg-warning/10 text-warning" : engine.name === "MongoDB" ? "bg-success/10 text-success" : "bg-primary/15 text-cyan"}`}><Database className="size-5" /></div><div className="min-w-0 flex-1"><h3 className="text-sm font-semibold">{engine.name}</h3><p className="mt-1 font-mono text-xs text-muted-foreground">v{engine.version}</p></div><Pill tone={engine.installed ? "success" : "muted"}>{engine.installed ? "Installed" : "Available"}</Pill></div><p className="my-4 break-all font-mono text-xs text-muted-foreground">{engine.installed ? `${engine.bind}:${engine.port}` : "No demo installation"}</p><div className="flex items-center justify-between gap-2 border-t border-border pt-3"><span className="text-xs text-muted-foreground">{engine.installed ? `Auto-start ${engine.auto ? "on" : "off"}` : "Sample versions"}</span><Button size="sm" variant="outline" onClick={() => engine.installed ? configure(engine) : setTab("installation")}>{engine.installed ? <Settings2 /> : <Download />}{engine.installed ? "Configure" : "Install"}</Button></div></article>)}</div>
         <DemoEditor title="All Databases" description="Database names & users" singular="Database" fields={[{ key: "name", label: "Database name" }, { key: "engine", label: "Engine", options: engines.filter((engine) => engine.installed).map((engine) => engine.name) }, { key: "user", label: "Username" }]} initialRows={rows} onRowsChange={setRows} validate={(values) => validateDatabaseRecord(values, engines)} details={(row) => <><div className="flex flex-wrap items-center gap-3"><div className="grid size-10 place-items-center rounded-lg bg-primary/15 text-cyan"><Database className="size-5" /></div><div className="min-w-0 flex-1"><h3 className="break-all font-mono text-sm font-semibold">{row.values['name']}</h3><p className="mt-1 text-xs text-muted-foreground">User: <span className="font-mono">{row.values['user']}</span></p></div><Pill tone="primary">{row.values['engine']}</Pill></div><div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground"><span>Storage <span className="ml-2 font-mono text-foreground">{sampleSizes[row.values['name'] ?? ""] ?? 0} MB</span></span><span>Tables / collections <span className="ml-2 font-mono text-foreground">{sampleCounts[row.values['name'] ?? ""] ?? 0}</span></span><span>Sample data</span></div></>} extraAction={(row) => <><Button size="sm" variant="ghost" onClick={() => setDetails(row)}><Cable />Open</Button><Button size="sm" variant="ghost" onClick={() => backup(row)}><Archive />Backup</Button></>} />
-        <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-border pt-5"><span className="text-xs text-muted-foreground">Database tools</span>{["phpMyAdmin", "pgAdmin", "Direct access", "Port 888"].map((label) => <Button key={label} variant="outline" size="sm" onClick={() => preview(`${label} access preview — no connection opened`)}><Cable />{label}</Button>)}</div>
+        <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-border pt-5">
+          <span className="text-xs text-muted-foreground">Database tools:</span>
+          <Button
+            variant="default"
+            size="sm"
+            onClick={async () => {
+              try {
+                const res = await databaseApi.launchPhpMyAdmin();
+                toast.success(res.message);
+                window.open(res.url, "_blank");
+              } catch {
+                window.open("http://localhost:888", "_blank");
+                toast.info("Opening phpMyAdmin on port 888...");
+              }
+            }}
+          >
+            <Cable className="mr-1 size-4" />phpMyAdmin (Port 888)
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.open("http://localhost:888", "_blank")}
+          >
+            <Database className="mr-1 size-4" />Direct Access (:888)
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => toast.info("PostgreSQL Admin: port 5432 default")}
+          >
+            pgAdmin (Port 5432)
+          </Button>
+        </div>
       </TabsContent>
       <TabsContent value="installation"><div className="mb-5 flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">Engine library</h2><Pill tone="muted">Sample releases</Pill></div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{engines.map((engine) => <article key={engine.name} className="flex min-w-0 flex-col rounded-lg border border-border bg-card p-5"><Database className="mb-4 size-7 text-cyan" /><h2 className="font-semibold">{engine.name}</h2><p className="mb-4 mt-2 text-xs text-muted-foreground">{engine.description}</p><div className="mb-5"><Pill tone={engine.installed ? "success" : "muted"}>{engine.installed ? `Installed · ${engine.version} · demo` : "Not installed · demo"}</Pill></div><AppVersionActions name={engine.name} versions={engine.versions} onInstallPreview={(version) => setEngines((current) => current.map((item) => item.name === engine.name ? { ...item, installed: true, version } : item))} /><Button variant="ghost" size="sm" className="mt-3" disabled={!engine.installed} onClick={() => configure(engine)}><Settings2 />Configure</Button></article>)}</div></TabsContent>
       <TabsContent value="backups"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="font-semibold">Database snapshots</h2><Pill tone="muted">No real backup files</Pill></div><div className="space-y-3">{snapshots.map((snapshot) => <article key={snapshot.id} className="flex min-w-0 flex-wrap items-center gap-4 rounded-lg border border-border bg-card p-4"><Archive className="size-5 shrink-0 text-warning" /><div className="min-w-0 flex-1 basis-40"><h3 className="break-all font-mono text-sm font-semibold">{snapshot.name}</h3><p className="mt-1 text-xs text-muted-foreground">{snapshot.engine} · {snapshot.size}</p><p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground"><Clock3 className="size-3" />{snapshot.time}</p></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => { setRestore(snapshot); setConfirmed(false); }}><RotateCw />Restore</Button><Button size="sm" variant="ghost" onClick={() => preview("Backup download preview — no file downloaded")}><Download />Download</Button></div></article>)}</div></TabsContent>

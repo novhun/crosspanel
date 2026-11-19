@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Activity, ArrowRight, Cloud, Download, FileText, Globe, Lock, Network, Play, Plus, RefreshCw, RotateCw, Search, Settings2, Square, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { AppVersionActions } from "./AppVersionActions";
 import { PageHeader, Pill, inputCls } from "./ui";
 import { initialTunnels, tunnelDefaults, validateTunnel, type Provider, type Tunnel, type TunnelDraft } from "./tunnel-data";
+import { tunnelApi } from "@/api/tunnel.api";
 
 const providers: Provider[] = ["Cloudflare", "Ngrok"];
 export function TunnelsWorkspace() {
@@ -26,6 +27,28 @@ export function TunnelsWorkspace() {
   const [removing, setRemoving] = useState<Tunnel>();
   const [logs, setLogs] = useState<Tunnel>();
   const [events, setEvents] = useState([{ id: 0, domain: "Panel", message: "Sample tunnel inventory loaded", time: "Sample" }]);
+  const [isLive, setIsLive] = useState(false);
+
+  useEffect(() => {
+    tunnelApi.list().then((list) => {
+      if (Array.isArray(list) && list.length > 0) {
+        setIsLive(true);
+        setTunnels(list.map((t, idx) => ({
+          id: Number(t.id) || idx + 1,
+          domain: t.remote_url || t.name,
+          host: "127.0.0.1",
+          port: t.local_port || 8000,
+          provider: (t.tunnel_type.toLowerCase() === "ngrok" ? "Ngrok" : "Cloudflare") as Provider,
+          running: t.status === "running",
+          protocol: "HTTP",
+          https: true,
+          websocket: true,
+          auto: true,
+          timeout: 30,
+        })));
+      }
+    }).catch(() => {});
+  }, []);
   function record(domain: string, message: string) {
     setEvents((current) => [{ id: (current[0]?.id ?? 0) + 1, domain, message, time: new Date().toLocaleTimeString() }, ...current]);
     toast(message, { description: "Demo only — no provider connection or real tunnel changes." });
@@ -37,7 +60,7 @@ export function TunnelsWorkspace() {
   }
   const visible = tunnels.filter((tunnel) => `${tunnel.domain} ${tunnel.host} ${tunnel.port}`.toLowerCase().includes(query.trim().toLowerCase()) && (providerFilter === "All providers" || tunnel.provider === providerFilter) && (status === "All statuses" || (status === "Online" ? tunnel.running : !tunnel.running)));
   return <>
-    <PageHeader title="Network Tunnels" desc="Cloudflare & Ngrok · Public endpoints & local services" action={<div className="flex flex-wrap items-center gap-3"><Pill tone="muted">Demo · Not connected</Pill><Button size="sm" variant="outline" onClick={() => record("Panel", "Sample tunnel status refreshed")}><RefreshCw />Refresh</Button></div>} />
+    <PageHeader title="Network Tunnels" desc="Cloudflare & Ngrok · Public endpoints & local services" action={<div className="flex flex-wrap items-center gap-3"><Pill tone={isLive ? "success" : "muted"}>{isLive ? "● Connected (Live API)" : "● Offline / Preview"}</Pill><Button size="sm" variant="outline" onClick={() => record("Panel", "Sample tunnel status refreshed")}><RefreshCw />Refresh</Button></div>} />
     <div className="mb-6 grid grid-cols-2 gap-x-4 gap-y-5 border-y border-border py-5 lg:grid-cols-4">{[{ label: "Tunnels", value: tunnels.length, icon: Network, tone: "text-cyan", detail: "Configured endpoints" }, { label: "Online", value: tunnels.filter((t) => t.running).length, icon: Activity, tone: "text-success", detail: `${tunnels.filter((t) => !t.running).length} offline · demo` }, { label: "HTTPS", value: tunnels.filter((t) => t.https).length, icon: Lock, tone: "text-warning", detail: "Sample secure endpoints" }, { label: "Installed clients", value: `${providers.filter((p) => installed[p]).length} / 2`, icon: Cloud, tone: "text-cyan", detail: "Provider previews" }].map((stat) => <div key={stat.label}><div className="flex items-center gap-2 text-xs text-muted-foreground"><stat.icon className={`size-4 ${stat.tone}`} />{stat.label}</div><p className="mt-2 font-display text-2xl font-semibold">{stat.value}</p><p className="mt-1 text-xs text-muted-foreground">{stat.detail}</p></div>)}</div>
     <Tabs value={tab} onValueChange={setTab}><TabsList className="mb-5 h-auto w-full justify-start gap-1 rounded-none border-b border-border bg-transparent p-0 pb-2"><TabsTrigger value="configuration" className="gap-2"><Network className="size-4" />Tunnels</TabsTrigger><TabsTrigger value="installation" className="gap-2"><Download className="size-4" />Installation</TabsTrigger><TabsTrigger value="activity" className="gap-2"><Activity className="size-4" />Activity</TabsTrigger></TabsList>
       <TabsContent value="configuration"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="font-semibold">Configured tunnels <span className="text-xs font-normal text-muted-foreground">({tunnels.length})</span></h2><Button size="sm" onClick={() => openForm()}><Plus />New Tunnel</Button></div><div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_auto_auto]"><label className="relative sm:col-span-2 xl:col-span-1"><Search className="absolute left-3 top-3 size-4 text-muted-foreground" /><input aria-label="Search tunnels" className={`${inputCls} pl-9`} placeholder="Search domain or local service…" value={query} onChange={(e) => setQuery(e.target.value)} /></label><select aria-label="Tunnel provider filter" className={inputCls} value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)}>{["All providers", ...providers].map((value) => <option key={value}>{value}</option>)}</select><select aria-label="Tunnel status filter" className={inputCls} value={status} onChange={(e) => setStatus(e.target.value)}>{["All statuses", "Online", "Offline"].map((value) => <option key={value}>{value}</option>)}</select></div>
