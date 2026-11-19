@@ -22,6 +22,9 @@ class ManagedService(Base):
     status = Column(String(50), default="stopped") # running, stopped, error
     os_type = Column(String(50), default="all") # all, linux, windows, mac
     category = Column(String(50), default="web") # web, db, runtime, container
+    run_mode = Column(String(20), default="native") # native or docker
+    docker_image = Column(String(100), nullable=True)
+    docker_container_name = Column(String(100), nullable=True)
 
 class DeployedApp(Base):
     __tablename__ = "deployed_apps"
@@ -88,3 +91,44 @@ class AnsiblePlaybook(Base):
     last_run = Column(DateTime, nullable=True)
     last_status = Column(String(50), default="READY")
     last_output = Column(Text, nullable=True)
+
+class CronTask(Base):
+    __tablename__ = "cron_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    schedule = Column(String(50), nullable=False) # e.g. "*/5 * * * *", "daily", "hourly"
+    command = Column(Text, nullable=False)
+    category = Column(String(50), default="maintenance") # backup, maintenance, cleanup, custom
+    enabled = Column(Boolean, default=True)
+    last_run = Column(DateTime, nullable=True)
+    last_status = Column(String(50), default="READY") # READY, SUCCESS, FAILED
+    last_output = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class SSLCertificate(Base):
+    __tablename__ = "ssl_certificates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain = Column(String(150), unique=True, index=True, nullable=False)
+    issuer = Column(String(100), default="Let's Encrypt")
+    cert_type = Column(String(50), default="letsencrypt") # letsencrypt, self_signed, custom
+    valid_until = Column(DateTime, nullable=True)
+    status = Column(String(50), default="active") # active, expired, pending
+    auto_renew = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    cert_path = Column(String(255), nullable=True)
+    key_path = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class DatabaseBackup(Base):
+    __tablename__ = "database_backups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(255), unique=True, nullable=False)
+    database_type = Column(String(50), default="sqlite") # sqlite, mariadb, postgres
+    database_name = Column(String(100), default="crosspanel")
+    file_size = Column(Integer, default=0) # bytes
+    file_path = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    notes = Column(String(255), nullable=True)

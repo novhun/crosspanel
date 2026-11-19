@@ -112,14 +112,37 @@ crosspanel/
 
 ## 🏃 Quick Start Guide
 
-### Prerequisites
-- **Python 3.10+** (Python 3.13 supported)
-- **Node.js 18+** & npm
-- (Optional) Docker & Git
+### Option 1: 1-Click Scripts (Recommended)
+
+#### 🚀 Run Both (Backend + Frontend)
+- **Windows**: Double-click `run.cmd` in the project root, or execute:
+  ```cmd
+  .\run.cmd
+  ```
+- **Linux / macOS**:
+  ```bash
+  chmod +x run.sh backend/run.sh frontend/run.sh
+  ./run.sh
+  ```
+
+#### ⚙️ Run Backend Only
+- **Windows**:
+  ```cmd
+  cd backend
+  run.cmd
+  ```
+- **Linux / macOS**:
+  ```bash
+  cd backend
+  ./run.sh
+  ```
+- Backend API: [http://localhost:8000](http://localhost:8000)
+- Swagger Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Frontend UI: [http://localhost:5173](http://localhost:5173)
 
 ---
 
-### Option 1: Running Locally (Development Mode)
+### Option 2: Running Manually (Development Mode)
 
 #### 1. Start the Backend API
 ```powershell

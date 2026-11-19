@@ -31,12 +31,20 @@ class ServiceItemSchema(BaseModel):
     status: str = "stopped"
     os_type: str = "all"
     category: str = "web"
+    run_mode: str = "native" # 'native' or 'docker'
+    docker_image: Optional[str] = None
+    docker_container_name: Optional[str] = None
+    available_modes: List[str] = ["native", "docker"]
 
     class Config:
         from_attributes = True
 
+class ServiceModeUpdate(BaseModel):
+    mode: str # 'native' or 'docker'
+
 class ServiceActionRequest(BaseModel):
     action: str # start, stop, restart
+    mode: Optional[str] = None # optional mode override
 
 class FirewallRuleCreate(BaseModel):
     name: str
@@ -56,3 +64,49 @@ class FirewallRuleResponse(FirewallRuleCreate):
 
 class TargetOSUpdate(BaseModel):
     target_os: str # auto, windows, linux, mac
+
+class ProcessInfo(BaseModel):
+    pid: int
+    name: str
+    username: Optional[str] = "N/A"
+    cpu_percent: float = 0.0
+    memory_percent: float = 0.0
+    memory_mb: float = 0.0
+    status: str = "running"
+    num_threads: Optional[int] = 1
+    create_time: Optional[str] = None
+
+class DiskPartitionInfo(BaseModel):
+    device: str
+    mountpoint: str
+    fstype: str
+    total_gb: float
+    used_gb: float
+    free_gb: float
+    percent: float
+
+class NetInterfaceInfo(BaseModel):
+    interface: str
+    family: str
+    address: str
+    netmask: Optional[str] = None
+
+class HardwareDiagnostics(BaseModel):
+    cpu_model: str
+    architecture: str
+    physical_cores: int
+    logical_cores: int
+    cpu_freq_current: float
+    cpu_freq_max: float
+    ram_total_gb: float
+    ram_used_gb: float
+    swap_total_gb: float
+    swap_used_gb: float
+    swap_percent: float
+    boot_time: str
+    uptime_seconds: float
+    hostname: str
+    os_name: str
+    os_version: str
+    partitions: List[DiskPartitionInfo] = []
+    network_interfaces: List[NetInterfaceInfo] = []

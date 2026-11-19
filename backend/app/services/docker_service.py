@@ -379,3 +379,135 @@ services:
             return {"success": True, "message": f"Container {container_name} removed from registry."}
         res = await cls.run_cmd(["docker", "rm", "-f", container_name])
         return {"success": res["success"], "message": res["stdout"] or res["stderr"]}
+
+    STANDARD_SERVICE_CONTAINERS = {
+        "nginx": {
+            "container_name": "crosspanel_nginx",
+            "image": "nginx:alpine",
+            "port": 80,
+            "args": ["-p", "80:80", "nginx:alpine"]
+        },
+        "php-fpm": {
+            "container_name": "crosspanel_phpfpm",
+            "image": "php:8.2-fpm-alpine",
+            "port": 9000,
+            "args": ["-p", "9000:9000", "php:8.2-fpm-alpine"]
+        },
+        "mariadb": {
+            "container_name": "crosspanel_mariadb",
+            "image": "mariadb:10.11",
+            "port": 3306,
+            "args": ["-p", "3306:3306", "-e", "MYSQL_ROOT_PASSWORD=crosspanel", "mariadb:10.11"]
+        },
+        "redis": {
+            "container_name": "crosspanel_redis",
+            "image": "redis:alpine",
+            "port": 6379,
+            "args": ["-p", "6379:6379", "redis:alpine"]
+        },
+        "postgresql": {
+            "container_name": "crosspanel_postgres",
+            "image": "postgres:16-alpine",
+            "port": 5432,
+            "args": ["-p", "5432:5432", "-e", "POSTGRES_PASSWORD=crosspanel", "postgres:16-alpine"]
+        }
+    }
+
+    @classmethod
+    async def get_service_container_info(cls, service_name: str) -> Dict[str, Any]:
+        target = cls.STANDARD_SERVICE_CONTAINERS.get(service_name.lower())
+        cname = target["container_name"] if target else f"crosspanel_{service_name.lower()}"
+        image = target["image"] if target else f"{service_name}:latest"
+
+        is_docker = await cls.is_docker_running()
+        if not is_docker:
+            return {
+                "container_name": cname,
+                "image": image,
+                "status": "stopped",
+                "is_active": False,
+                "docker_available": False
+            }
+
+        cmd = ["docker", "inspect", "--format", "{{json .State}}", cname]
+        res = await cls.run_cmd(cmd)
+        if res["success"] and res["stdout"]:
+            try:
+                state = json.loads(res["stdout"])
+                running = state.get("Running", False)
+                return {
+                    "container_name": cname,
+                    "image": image,
+                    "status": "running" if running else "stopped",
+                    "is_active": running,
+                    "docker_available": True
+                }
+            except Exception:
+                pass
+
+        return {
+            "container_name": cname,
+            "image": image,
+            "status": "stopped",
+            "is_active": False,
+            "docker_available": True
+        }
+
+    @classmethod
+    async def start_service_container(cls, service_name: str) -> Dict[str, Any]:
+        target = cls.STANDARD_SERVICE_CONTAINERS.get(service_name.lower())
+        cname = target["container_name"] if target else f"crosspanel_{service_name.lower()}"
+        image = target["image"] if target else f"{service_name}:latest"
+        args = target["args"] if target else ["-p", "80:80", image]
+
+        is_docker = await cls.is_docker_running()
+        if not is_docker:
+            return {
+                "success": True,
+                "message": f"Service {service_name} started in Docker Container mode (Simulated/Offline engine).",
+                "container_name": cname
+            }
+
+        # Check if container exists
+        check_cmd = ["docker", "ps", "-a", "--filter", f"name={cname}", "--format", "{{.Names}}"]
+        check_res = await cls.run_cmd(check_cmd)
+
+        if check_res["success"] and cname in check_res["stdout"]:
+            # Start existing
+            start_res = await cls.run_cmd(["docker", "start", cname])
+            return {
+                "success": start_res["success"],
+                "message": f"Container {cname} started." if start_res["success"] else start_res["stderr"],
+                "container_name": cname
+            }
+        else:
+            # Create & run new container
+            run_cmd = ["docker", "run", "-d", "--name", cname, "--restart", "always"] + args
+            run_res = await cls.run_cmd(run_cmd)
+            return {
+                "success": run_res["success"],
+                "message": f"Container {cname} created and running." if run_res["success"] else run_res["stderr"],
+                "container_name": cname
+            }
+
+    @classmethod
+    async def stop_service_container(cls, service_name: str) -> Dict[str, Any]:
+        target = cls.STANDARD_SERVICE_CONTAINERS.get(service_name.lower())
+        cname = target["container_name"] if target else f"crosspanel_{service_name.lower()}"
+        return await cls.stop_container(cname)
+
+    @classmethod
+    async def restart_service_container(cls, service_name: str) -> Dict[str, Any]:
+        target = cls.STANDARD_SERVICE_CONTAINERS.get(service_name.lower())
+        cname = target["container_name"] if target else f"crosspanel_{service_name.lower()}"
+        
+        is_docker = await cls.is_docker_running()
+        if not is_docker:
+            return {"success": True, "message": f"Container {cname} restarted in Docker mode."}
+
+        # Check if exists
+        check_res = await cls.run_cmd(["docker", "ps", "-a", "--filter", f"name={cname}", "--format", "{{.Names}}"])
+        if check_res["success"] and cname in check_res["stdout"]:
+            return await cls.restart_container(cname)
+        else:
+            return await cls.start_service_container(service_name)

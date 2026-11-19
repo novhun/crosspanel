@@ -13,5 +13,21 @@ async def get_db():
 
 async def init_db():
     import app.models.settings  # noqa: F401 - Register models with Base.metadata
+    from sqlalchemy import inspect, text
+
+    def _sync_schema(connection):
+        Base.metadata.create_all(connection)
+        try:
+            inspector = inspect(connection)
+            for table_name, table in Base.metadata.tables.items():
+                if inspector.has_table(table_name):
+                    existing_cols = {c["name"] for c in inspector.get_columns(table_name)}
+                    for column in table.columns:
+                        if column.name not in existing_cols:
+                            col_type = column.type.compile(connection.dialect)
+                            connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column.name} {col_type}"))
+        except Exception as e:
+            print(f"[Database Init Warning] Auto-migration check: {e}")
+
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_sync_schema)

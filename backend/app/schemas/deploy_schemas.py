@@ -84,3 +84,19 @@ class FileUnzipRequest(BaseModel):
 class FileChmodRequest(BaseModel):
     path: str
     mode: str
+
+class CronTaskCreate(BaseModel):
+    name: str
+    schedule: str
+    command: str
+    category: str = "maintenance"
+
+class SSLCertificateCreate(BaseModel):
+    domain: str
+    issuer: str = "Let's Encrypt"
+    cert_type: str = "letsencrypt" # letsencrypt, self_signed, custom
+
+class DatabaseBackupCreate(BaseModel):
+    database_type: str = "sqlite" # sqlite, mariadb, postgres
+    database_name: str = "crosspanel"
+    notes: Optional[str] = None
