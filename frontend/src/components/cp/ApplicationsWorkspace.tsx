@@ -289,7 +289,7 @@ export function ApplicationsWorkspace() {
   }, []);
 
   const preview = (action: string) =>
-    toast.info(`Application ${action}`, {
+    toast(`Demo ${action}`, {
       description: "Deployed via CrossPanel Container Engine.",
     });
 

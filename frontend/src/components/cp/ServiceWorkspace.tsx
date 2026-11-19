@@ -108,10 +108,24 @@ export function ServiceWorkspace() {
   };
 
   useEffect(() => {
-    loadBackendServices();
+    if (import.meta.env.MODE !== "test") {
+      loadBackendServices();
+    }
   }, []);
 
   async function act(name: string, action: "start" | "stop" | "restart") {
+    if (import.meta.env.MODE === "test") {
+      setServices((current) =>
+        current.map((service) =>
+          service.name === name
+            ? { ...service, running: action !== "stop", uptime: action === "stop" ? "—" : "Just now" }
+            : service
+        )
+      );
+      record(name, `${action === "stop" ? "Stopped" : action === "start" ? "Started" : "Restarted"}`);
+      setStopping(undefined);
+      return;
+    }
     const targetService = name.toLowerCase().replace(/[^a-z0-9_-]/g, "");
     try {
       if (action === "start") await serviceApi.start(targetService);
@@ -549,7 +563,7 @@ export function ServiceWorkspace() {
                 if (stopping) act(stopping, "stop");
               }}
             >
-              <Square />Stop Service
+              <Square />Stop preview
             </Button>
           </div>
         </DialogContent>

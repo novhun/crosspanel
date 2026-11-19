@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { ApplicationsWorkspace } from "@/components/cp/ApplicationsWorkspace";
 
-vi.mock("sonner", () => ({ toast: vi.fn() }));
+const { toastMock } = vi.hoisted(() => ({
+  toastMock: Object.assign(vi.fn(), { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn() }),
+}));
+vi.mock("sonner", () => ({ toast: toastMock }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("Applications previews", () => {

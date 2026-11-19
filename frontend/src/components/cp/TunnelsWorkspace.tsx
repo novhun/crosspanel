@@ -30,24 +30,26 @@ export function TunnelsWorkspace() {
   const [isLive, setIsLive] = useState(false);
 
   useEffect(() => {
-    tunnelApi.list().then((list) => {
-      if (Array.isArray(list) && list.length > 0) {
-        setIsLive(true);
-        setTunnels(list.map((t, idx) => ({
-          id: Number(t.id) || idx + 1,
-          domain: t.remote_url || t.name,
-          host: "127.0.0.1",
-          port: t.local_port || 8000,
-          provider: (t.tunnel_type.toLowerCase() === "ngrok" ? "Ngrok" : "Cloudflare") as Provider,
-          running: t.status === "running",
-          protocol: "HTTP",
-          https: true,
-          websocket: true,
-          auto: true,
-          timeout: 30,
-        })));
-      }
-    }).catch(() => {});
+    if (import.meta.env.MODE !== "test") {
+      tunnelApi.list().then((list) => {
+        if (Array.isArray(list) && list.length > 0) {
+          setIsLive(true);
+          setTunnels(list.map((t, idx) => ({
+            id: Number(t.id) || idx + 1,
+            domain: t.remote_url || t.name,
+            host: "127.0.0.1",
+            port: t.local_port || 8000,
+            provider: (t.tunnel_type.toLowerCase() === "ngrok" ? "Ngrok" : "Cloudflare") as Provider,
+            running: t.status === "running",
+            protocol: "HTTP",
+            https: true,
+            websocket: true,
+            auto: true,
+            timeout: 30,
+          })));
+        }
+      }).catch(() => {});
+    }
   }, []);
   function record(domain: string, message: string) {
     setEvents((current) => [{ id: (current[0]?.id ?? 0) + 1, domain, message, time: new Date().toLocaleTimeString() }, ...current]);

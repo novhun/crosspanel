@@ -2,7 +2,10 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServiceWorkspace } from "@/components/cp/ServiceWorkspace";
 
-vi.mock("sonner", () => ({ toast: vi.fn() }));
+const { toastMock } = vi.hoisted(() => ({
+  toastMock: Object.assign(vi.fn(), { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn() }),
+}));
+vi.mock("sonner", () => ({ toast: toastMock }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const card = (name: string) => within(screen.getByRole("article", { name: `${name} service`, hidden: true }));
 const openConfiguration = () => fireEvent.mouseDown(screen.getByRole("tab", { name: "Configuration" }), { button: 0, ctrlKey: false });
