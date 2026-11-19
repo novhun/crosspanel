@@ -18,7 +18,7 @@ if errorlevel 1 (
 
 if not exist "node_modules\" (
     echo [INFO] Installing frontend dependencies (npm install)...
-    npm install
+    npm install --legacy-peer-deps
     if errorlevel 1 (
         echo [ERROR] npm install failed.
         pause

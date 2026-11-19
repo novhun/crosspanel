@@ -15,7 +15,7 @@ fi
 
 if [ ! -d "node_modules" ]; then
     echo "[INFO] Installing frontend dependencies (npm install)..."
-    npm install
+    npm install --legacy-peer-deps
 fi
 
 echo "[INFO] Starting Vite development server..."
