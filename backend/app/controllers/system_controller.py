@@ -103,7 +103,7 @@ async def toggle_terminal():
 
 @router.get("/processes", response_model=List[ProcessInfo])
 async def list_system_processes(
-    sort_by: str = Query("cpu", enum=["cpu", "memory", "pid", "name"]),
+    sort_by: str = Query("cpu", pattern="^(cpu|memory|pid|name)$"),
     limit: int = Query(50, ge=5, le=200),
     search: Optional[str] = Query(None)
 ):

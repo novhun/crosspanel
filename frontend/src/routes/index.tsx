@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { useSystemStats } from "@/hooks/useSystemStats";
 import { serviceApi } from "@/api/service.api";
 import { databaseApi } from "@/api/database.api";
+import { SkillIcon } from "@/components/cp/SkillIcon";
 
 export const Route = createFileRoute("/")({
   head: () =>
@@ -49,10 +50,10 @@ export const Route = createFileRoute("/")({
 
 const defaultServices = ["nginx", "php-fpm", "mariadb", "docker"];
 const apps = [
-  { name: "WordPress", sub: "CMS", icon: Globe2, cls: "bg-gradient-primary" },
-  { name: "FastAPI", sub: "Python", icon: Zap, cls: "bg-gradient-success" },
-  { name: "Node.js", sub: "Runtime", icon: Hexagon, cls: "bg-success/30" },
-  { name: "React", sub: "Frontend", icon: Atom, cls: "bg-primary/30" },
+  { name: "WordPress", skill: "wordpress", sub: "CMS", cls: "bg-secondary/40 hover:border-cyan/50" },
+  { name: "FastAPI", skill: "fastapi", sub: "Python", cls: "bg-secondary/40 hover:border-emerald-500/50" },
+  { name: "Node.js", skill: "nodejs", sub: "Runtime", cls: "bg-secondary/40 hover:border-green-500/50" },
+  { name: "React", skill: "react", sub: "Frontend", cls: "bg-secondary/40 hover:border-cyan/50" },
 ];
 const eco = [
   { t: "Git Auto-Deploy", d: "Connect GitHub/GitLab, Auto Build & Deploy", icon: Github, to: "/deployments" },
@@ -222,11 +223,16 @@ function Dashboard() {
             <button
               key={a.name}
               onClick={() => toast.success(`Initiating ${a.name} deploy wizard...`)}
-              className={cn("flex flex-col items-center gap-2 rounded-xl border border-border p-4 transition hover:-translate-y-0.5", a.cls)}
+              className={cn(
+                "group flex flex-col items-center gap-2 rounded-xl border border-border p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md",
+                a.cls
+              )}
             >
-              <a.icon className="h-10 w-10" />
-              <div className="font-display font-semibold">{a.name}</div>
-              <div className="text-xs opacity-80">{a.sub}</div>
+              <div className="grid size-12 place-items-center rounded-xl bg-background/50 p-1">
+                <SkillIcon name={a.skill} size={40} />
+              </div>
+              <div className="font-display font-semibold text-sm group-hover:text-cyan transition-colors">{a.name}</div>
+              <div className="text-xs text-muted-foreground">{a.sub}</div>
             </button>
           ))}
         </div>

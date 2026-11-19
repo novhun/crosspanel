@@ -58,6 +58,16 @@ async def root():
         "open_source": "Free Forever & Open-Source"
     }
 
+@app.get("/healthz", tags=["Health"])
+@app.get("/api/health", tags=["Health"])
+async def health_check():
+    return {
+        "status": "healthy",
+        "name": settings.PROJECT_NAME,
+        "version": settings.VERSION,
+        "host_os": settings.HOST_OS
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

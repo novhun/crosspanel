@@ -169,11 +169,23 @@ npm run dev
 
 ---
 
-### Option 2: Running with Docker Compose
+### Option 3: Running with Docker Compose (Production Stack)
+
 ```bash
+# 1. Create your environment config
+cp .env.example .env
+
+# 2. Build and run containers in detached mode
 docker compose up -d --build
+
+# 3. Check container logs and health
+docker compose ps
+docker compose logs -f
 ```
-- Open [http://localhost:5173](http://localhost:5173) in your browser.
+- Web UI: [http://localhost:5173](http://localhost:5173)
+- Backend API: [http://localhost:8000](http://localhost:8000)
+- Health Check: [http://localhost:8000/healthz](http://localhost:8000/healthz)
+- Swagger Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ---
 
