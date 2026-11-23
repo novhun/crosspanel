@@ -62,10 +62,19 @@ function ProjectsTab() {
   const settings = useSyncExternalStore(projectSettingsStore.subscribe, projectSettingsStore.getSnapshot, projectSettingsStore.getServerSnapshot);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"All" | DeployStatus>("All");
-  const projects = filterProjects(demoProjects.map((project) => {
+  const [engineFilter, setEngineFilter] = useState<"All" | "Native" | "Docker">("All");
+
+  const rawProjects = demoProjects.map((project) => {
     const saved = settings[project.id];
     return saved ? { ...project, name: saved.name, domain: saved.domain, repo: saved.repo, branch: saved.branch, runtime: saved.runtime, version: saved.version } : project;
-  }), query, status);
+  });
+
+  const projects = filterProjects(rawProjects, query, status).filter((p) => {
+    if (engineFilter === "All") return true;
+    if (engineFilter === "Docker") return p.runtime === "Docker";
+    return p.runtime !== "Docker";
+  });
+
   return (
     <>
       <div className="mb-5 flex flex-wrap items-center gap-3">
@@ -78,15 +87,26 @@ function ProjectsTab() {
             <button key={s} onClick={() => setStatus(s)} className={cn("rounded-md px-3 py-1.5", status === s ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>{s}</button>
           ))}
         </div>
+        <div className="flex rounded-lg border border-border p-0.5 text-xs">
+          {(["All", "Native", "Docker"] as const).map((e) => (
+            <button key={e} onClick={() => setEngineFilter(e)} className={cn("rounded-md px-3 py-1.5", engineFilter === e ? "bg-cyan text-primary-foreground font-semibold" : "text-muted-foreground")}>
+              {e === "Native" ? "⚡ Native" : e === "Docker" ? "🐳 Docker" : "All Engines"}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         {projects.map((p) => {
           const MethodIcon = methodIcon[p.method];
+          const isDocker = p.runtime === "Docker";
           return (
             <article key={p.id} className="glass min-w-0 rounded-2xl p-5">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-display text-lg font-semibold">{p.name}</h3>
                 <Pill tone={statusTone(p.status)}>{p.status}</Pill>
+                <Pill tone={isDocker ? "primary" : "success"}>
+                  {isDocker ? "🐳 Docker" : "⚡ Native OS"}
+                </Pill>
                 <span className="ml-auto text-xs text-muted-foreground">{p.builds} builds</span>
               </div>
               <a className="mt-1 flex items-center gap-1.5 text-sm text-cyan" onClick={() => demo(`open ${p.domain}`)} role="link" tabIndex={0}><Globe className="h-3.5 w-3.5" />{p.domain}<ExternalLink className="h-3 w-3" /></a>
@@ -112,17 +132,64 @@ function ProjectsTab() {
 }
 
 function NewDeploymentTab() {
+  const [engineMode, setEngineMode] = useState<"native" | "docker">("native");
   const [runtime, setRuntime] = useState(runtimes[0]?.name ?? "Node.js");
   const [version, setVersion] = useState(runtimes[0]?.versions[0] ?? "");
   const [method, setMethod] = useState<DeployMethod>("Git push");
   function submit(e: FormEvent) {
     e.preventDefault();
-    demo("deployment project created");
+    demo(`deployment project created (${engineMode} mode)`);
   }
   return (
     <div className="grid gap-5 lg:grid-cols-3">
       <Panel title="Create Deployment" icon={Rocket} className="lg:col-span-2">
         <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          {/* Engine Mode: Native OS vs Docker */}
+          <div className="sm:col-span-2 space-y-1.5">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Deployment Target</span>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setEngineMode("native");
+                  if (runtime === "Docker") {
+                    setRuntime("Node.js");
+                    setVersion(versionsFor("Node.js")[0] ?? "");
+                  }
+                }}
+                className={cn(
+                  "flex items-center gap-2 rounded-xl border p-3 text-left transition text-sm font-medium",
+                  engineMode === "native"
+                    ? "border-success/60 bg-success/10 text-success"
+                    : "border-border bg-secondary/40 text-muted-foreground hover:bg-accent"
+                )}
+              >
+                <span>⚡ Native Process (No Docker)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEngineMode("docker");
+                  setRuntime("Docker");
+                  setVersion("latest");
+                }}
+                className={cn(
+                  "flex items-center gap-2 rounded-xl border p-3 text-left transition text-sm font-medium",
+                  engineMode === "docker"
+                    ? "border-cyan/60 bg-cyan/10 text-cyan"
+                    : "border-border bg-secondary/40 text-muted-foreground hover:bg-accent"
+                )}
+              >
+                <span>🐳 Docker Container</span>
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {engineMode === "native"
+                ? "Direct host execution via systemd / PM2 / Windows service. No Docker daemon needed."
+                : "Containerized deployment running inside Docker daemon."}
+            </p>
+          </div>
+
           <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">Project name</span><input required className={inputCls} placeholder="my-app" /></label>
           <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">Domain</span><input required className={inputCls} placeholder="app.example.com" /></label>
           <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">Git provider</span><select className={inputCls}><option>GitHub</option><option>GitLab</option></select></label>

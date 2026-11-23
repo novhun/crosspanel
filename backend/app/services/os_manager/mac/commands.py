@@ -83,6 +83,18 @@ class MacCommands:
         }
 
     @classmethod
+    async def install_service(cls, service_name: str) -> Dict[str, Any]:
+        brew_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
+        cmd = f"brew install {brew_svc} && brew services start {brew_svc}"
+        res = await cls.run_sh(cmd)
+        return {
+            "success": res["success"],
+            "package": brew_svc,
+            "manager": "homebrew",
+            "message": f"Native package {service_name} ({brew_svc}) installed via Homebrew." if res["success"] else res["stderr"]
+        }
+
+    @classmethod
     async def get_firewall_rules(cls) -> List[Dict[str, Any]]:
         return [
             {"name": "macOS Packet Filter (pf)", "action": "ALLOW", "direction": "IN", "protocol": "TCP", "port": "80, 443", "enabled": True}

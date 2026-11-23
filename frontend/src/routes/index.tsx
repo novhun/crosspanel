@@ -67,6 +67,24 @@ function Dashboard() {
   const { stats, history, isLive } = useSystemStats(2500);
   const [os, setOs] = useState<string>("Linux");
   const [actingService, setActingService] = useState<string | null>(null);
+  const [liveServices, setLiveServices] = useState<any[]>([]);
+
+  const fetchLiveServices = async () => {
+    try {
+      const data = await serviceApi.list();
+      if (Array.isArray(data) && data.length > 0) {
+        setLiveServices(data);
+      }
+    } catch {
+      // Fallback to default
+    }
+  };
+
+  useEffect(() => {
+    if (import.meta.env.MODE !== "test") {
+      fetchLiveServices();
+    }
+  }, []);
 
   useEffect(() => {
     if (stats?.platform_system) {
@@ -85,7 +103,8 @@ function Dashboard() {
       if (action === "start") await serviceApi.start(serviceName);
       else if (action === "stop") await serviceApi.stop(serviceName);
       else await serviceApi.restart(serviceName);
-      toast.success(`${serviceName} ${action} command sent.`);
+      toast.success(`${serviceName} ${action} command executed.`);
+      await fetchLiveServices();
     } catch {
       toast.info(`${serviceName}: ${action} (preview simulated)`);
     } finally {
@@ -168,41 +187,101 @@ function Dashboard() {
         }
       >
         <div className="space-y-3">
-          {defaultServices.map((s) => (
-            <div key={s} className="flex items-center gap-3">
-              <div className="grid h-9 w-9 place-items-center rounded-lg bg-secondary font-bold text-success uppercase">
-                {s[0]}
+          {liveServices.length > 0 ? (
+            liveServices.slice(0, 5).map((s) => {
+              const isRunning = s.is_active || s.status === "running";
+              return (
+                <div key={s.name} className="flex items-center gap-3">
+                  <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg font-bold uppercase ${
+                    isRunning ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground"
+                  }`}>
+                    {s.name[0]}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-medium capitalize text-sm">{s.display_name || s.name}</span>
+                      {s.default_port && (
+                        <span className="font-mono text-[11px] text-muted-foreground">:{s.default_port}</span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-1.5">
+                      <Pill tone={s.run_mode === "docker" ? "primary" : "cyan"}>
+                        {s.run_mode === "docker" ? "Docker" : "Native"}
+                      </Pill>
+                    </div>
+                  </div>
+                  <Pill tone={isRunning ? "success" : "muted"}>
+                    {isRunning ? "Running" : "Stopped"}
+                  </Pill>
+                  <div className="flex gap-1.5">
+                    {isRunning ? (
+                      <button
+                        disabled={actingService === s.name}
+                        onClick={() => handleServiceAction(s.name, "stop")}
+                        className="rounded-md bg-destructive p-2 transition hover:opacity-90 disabled:opacity-50"
+                        title="Stop service"
+                      >
+                        <Square className="h-3.5 w-3.5" />
+                      </button>
+                    ) : (
+                      <button
+                        disabled={actingService === s.name}
+                        onClick={() => handleServiceAction(s.name, "start")}
+                        className="rounded-md bg-primary p-2 transition hover:opacity-90 disabled:opacity-50"
+                        title="Start service"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    <button
+                      disabled={actingService === s.name || !isRunning}
+                      onClick={() => handleServiceAction(s.name, "restart")}
+                      className="rounded-md bg-primary/70 p-2 transition hover:opacity-90 disabled:opacity-50"
+                      title="Restart service"
+                    >
+                      <RotateCw className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            defaultServices.map((s) => (
+              <div key={s} className="flex items-center gap-3">
+                <div className="grid h-9 w-9 place-items-center rounded-lg bg-secondary font-bold text-success uppercase">
+                  {s[0]}
+                </div>
+                <div className="flex-1 font-medium capitalize">{s}</div>
+                <Pill tone={isLive ? "success" : "muted"}>Active</Pill>
+                <div className="flex gap-1.5">
+                  <button
+                    disabled={actingService === s}
+                    onClick={() => handleServiceAction(s, "start")}
+                    className="rounded-md bg-primary p-2 transition hover:opacity-90 disabled:opacity-50"
+                    title="Start service"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    disabled={actingService === s}
+                    onClick={() => handleServiceAction(s, "stop")}
+                    className="rounded-md bg-destructive p-2 transition hover:opacity-90 disabled:opacity-50"
+                    title="Stop service"
+                  >
+                    <Square className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    disabled={actingService === s}
+                    onClick={() => handleServiceAction(s, "restart")}
+                    className="rounded-md bg-primary/70 p-2 transition hover:opacity-90 disabled:opacity-50"
+                    title="Restart service"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
-              <div className="flex-1 font-medium capitalize">{s}</div>
-              <Pill tone={isLive ? "success" : "muted"}>Active</Pill>
-              <div className="flex gap-1.5">
-                <button
-                  disabled={actingService === s}
-                  onClick={() => handleServiceAction(s, "start")}
-                  className="rounded-md bg-primary p-2 transition hover:opacity-90 disabled:opacity-50"
-                  title="Start service"
-                >
-                  <Play className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  disabled={actingService === s}
-                  onClick={() => handleServiceAction(s, "stop")}
-                  className="rounded-md bg-destructive p-2 transition hover:opacity-90 disabled:opacity-50"
-                  title="Stop service"
-                >
-                  <Square className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  disabled={actingService === s}
-                  onClick={() => handleServiceAction(s, "restart")}
-                  className="rounded-md bg-primary/70 p-2 transition hover:opacity-90 disabled:opacity-50"
-                  title="Restart service"
-                >
-                  <RotateCw className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </Panel>
 

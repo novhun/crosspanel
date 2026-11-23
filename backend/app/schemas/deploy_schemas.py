@@ -6,18 +6,21 @@ class DeployOneClickRequest(BaseModel):
     name: str
     template_name: str # wordpress, fastapi, nodejs, react, laravel, postgres, django, express
     port: int
+    mode: Optional[str] = "native" # native or docker
     env_vars: Optional[Dict[str, str]] = {}
     source_url: Optional[str] = None
 
 class DeployCustomComposeRequest(BaseModel):
     name: str
     compose_yaml: str
+    mode: Optional[str] = "docker"
     env_vars: Optional[Dict[str, str]] = {}
 
 class GitDeployRequest(BaseModel):
     name: str
     repo_url: str
     branch: str = "main"
+    mode: Optional[str] = "native" # native or docker
     env_type: str = "production" # production, preview
     build_command: Optional[str] = "npm install && npm run build"
     port: Optional[int] = 3000

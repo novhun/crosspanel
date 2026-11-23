@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Dict, Any, Optional
+from pydantic import BaseModel
 from app.db.database import get_db
 from app.models.settings import ManagedService
 from app.schemas.server_stats import ServiceItemSchema, ServiceModeUpdate, ServiceActionRequest
@@ -152,12 +153,65 @@ async def list_services(db: AsyncSession = Depends(get_db)):
         })
     return results
 
+class ServiceInstallRequest(BaseModel):
+    mode: Optional[str] = "native"
+    version: Optional[str] = "latest"
+
+@router.post("/{service_name}/install")
+async def install_service_endpoint(service_name: str, payload: Optional[ServiceInstallRequest] = None, db: AsyncSession = Depends(get_db)):
+    mode = (payload.mode if payload else "native") or "native"
+    stmt = select(ManagedService).where(ManagedService.name == service_name)
+    db_res = await db.execute(stmt)
+    record = db_res.scalar_one_or_none()
+
+    if mode == "native":
+        res = await os_manager_factory.install_service(service_name)
+    else:
+        if record and record.docker_image:
+            res = await DockerService.pull_image(record.docker_image)
+        else:
+            res = {"success": True, "message": f"Docker image for {service_name} prepared."}
+
+    if record:
+        record.run_mode = mode
+        if res.get("success"):
+            record.status = "stopped"
+        await db.commit()
+
+    return {
+        "success": res.get("success", True),
+        "name": service_name,
+        "mode": mode,
+        "message": res.get("message", f"Service {service_name} installed successfully ({mode} mode).")
+    }
+
+def normalize_service_name(name: str) -> str:
+    n = name.lower().replace("-", "").replace("_", "").replace(" ", "")
+    if "nginx" in n:
+        return "nginx"
+    if "php" in n:
+        return "php-fpm"
+    if "maria" in n or "mysql" in n:
+        return "mariadb"
+    if "redis" in n:
+        return "redis"
+    if "postgres" in n:
+        return "postgresql"
+    if "docker" in n:
+        return "docker"
+    return name.lower()
+
 @router.post("/{service_name}/mode")
 async def update_service_mode(service_name: str, payload: ServiceModeUpdate, db: AsyncSession = Depends(get_db)):
     if payload.mode.lower() not in ["native", "docker"]:
         raise HTTPException(status_code=400, detail="Mode must be 'native' or 'docker'")
 
-    stmt = select(ManagedService).where(ManagedService.name == service_name)
+    canon = normalize_service_name(service_name)
+    stmt = select(ManagedService).where(
+        (ManagedService.name == canon) |
+        (ManagedService.name == service_name) |
+        (ManagedService.display_name.ilike(f"%{service_name}%"))
+    )
     db_res = await db.execute(stmt)
     record = db_res.scalar_one_or_none()
 
@@ -170,23 +224,28 @@ async def update_service_mode(service_name: str, payload: ServiceModeUpdate, db:
 
     return {
         "success": True,
-        "name": service_name,
+        "name": record.name,
         "run_mode": record.run_mode,
-        "message": f"Service {service_name} run mode switched to {record.run_mode.upper()}."
+        "message": f"Service {record.name} run mode switched to {record.run_mode.upper()}."
     }
 
 @router.post("/{service_name}/start")
 async def start_service(service_name: str, mode: Optional[str] = None, db: AsyncSession = Depends(get_db)):
-    stmt = select(ManagedService).where(ManagedService.name == service_name)
+    canon = normalize_service_name(service_name)
+    stmt = select(ManagedService).where(
+        (ManagedService.name == canon) |
+        (ManagedService.name == service_name) |
+        (ManagedService.display_name.ilike(f"%{service_name}%"))
+    )
     db_res = await db.execute(stmt)
     record = db_res.scalar_one_or_none()
 
     target_mode = mode or (record.run_mode if record else "native")
 
     if target_mode == "docker":
-        res = await DockerService.start_service_container(service_name)
+        res = await DockerService.start_service_container(canon)
     else:
-        res = await os_manager_factory.start_service(service_name)
+        res = await os_manager_factory.start_service(canon)
 
     if record:
         record.status = "running" if res.get("success") else "error"
@@ -194,20 +253,25 @@ async def start_service(service_name: str, mode: Optional[str] = None, db: Async
         record.run_mode = target_mode
         await db.commit()
 
-    return {**res, "mode": target_mode}
+    return {**res, "mode": target_mode, "name": canon}
 
 @router.post("/{service_name}/stop")
 async def stop_service(service_name: str, mode: Optional[str] = None, db: AsyncSession = Depends(get_db)):
-    stmt = select(ManagedService).where(ManagedService.name == service_name)
+    canon = normalize_service_name(service_name)
+    stmt = select(ManagedService).where(
+        (ManagedService.name == canon) |
+        (ManagedService.name == service_name) |
+        (ManagedService.display_name.ilike(f"%{service_name}%"))
+    )
     db_res = await db.execute(stmt)
     record = db_res.scalar_one_or_none()
 
     target_mode = mode or (record.run_mode if record else "native")
 
     if target_mode == "docker":
-        res = await DockerService.stop_service_container(service_name)
+        res = await DockerService.stop_service_container(canon)
     else:
-        res = await os_manager_factory.stop_service(service_name)
+        res = await os_manager_factory.stop_service(canon)
 
     if record:
         record.status = "stopped"
@@ -215,20 +279,25 @@ async def stop_service(service_name: str, mode: Optional[str] = None, db: AsyncS
         record.run_mode = target_mode
         await db.commit()
 
-    return {**res, "mode": target_mode}
+    return {**res, "mode": target_mode, "name": canon}
 
 @router.post("/{service_name}/restart")
 async def restart_service(service_name: str, mode: Optional[str] = None, db: AsyncSession = Depends(get_db)):
-    stmt = select(ManagedService).where(ManagedService.name == service_name)
+    canon = normalize_service_name(service_name)
+    stmt = select(ManagedService).where(
+        (ManagedService.name == canon) |
+        (ManagedService.name == service_name) |
+        (ManagedService.display_name.ilike(f"%{service_name}%"))
+    )
     db_res = await db.execute(stmt)
     record = db_res.scalar_one_or_none()
 
     target_mode = mode or (record.run_mode if record else "native")
 
     if target_mode == "docker":
-        res = await DockerService.restart_service_container(service_name)
+        res = await DockerService.restart_service_container(canon)
     else:
-        res = await os_manager_factory.restart_service(service_name)
+        res = await os_manager_factory.restart_service(canon)
 
     if record:
         record.status = "running" if res.get("success") else "error"
@@ -236,4 +305,5 @@ async def restart_service(service_name: str, mode: Optional[str] = None, db: Asy
         record.run_mode = target_mode
         await db.commit()
 
-    return {**res, "mode": target_mode}
+    return {**res, "mode": target_mode, "name": canon}
+

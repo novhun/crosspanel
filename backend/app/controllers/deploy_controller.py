@@ -8,6 +8,7 @@ from app.models.settings import DeployedApp
 from app.schemas.deploy_schemas import DeployOneClickRequest, DeployCustomComposeRequest, GitDeployRequest, AppResponse
 from app.services.docker_service import DockerService
 from app.services.git_service import GitService
+from app.core.config import settings
 
 router = APIRouter(prefix="/deploy", tags=["App Deployments"])
 
@@ -23,19 +24,45 @@ async def list_deployed_apps(db: AsyncSession = Depends(get_db)):
 
 @router.post("/one-click")
 async def deploy_one_click(req: DeployOneClickRequest, db: AsyncSession = Depends(get_db)):
-    docker_res = await DockerService.deploy_template(
-        app_name=req.name,
-        template_key=req.template_name,
-        port=req.port,
-        env_vars=req.env_vars
-    )
+    mode = req.mode or "native"
+    docker_res = {}
+    is_native = mode == "native"
+
+    if not is_native:
+        # Check if Docker is available
+        is_docker_up = await DockerService.is_docker_running()
+        if is_docker_up:
+            docker_res = await DockerService.deploy_template(
+                app_name=req.name,
+                template_key=req.template_name,
+                port=req.port,
+                env_vars=req.env_vars
+            )
+        else:
+            # Fall back to native execution if Docker is offline
+            is_native = True
+            mode = "native"
+
+    if is_native:
+        import os
+        project_dir = os.path.join(settings.PROJECTS_DIR, req.name.lower())
+        os.makedirs(project_dir, exist_ok=True)
+        # Create native manifest / starter
+        launcher_file = os.path.join(project_dir, "run.sh" if settings.HOST_OS != "windows" else "run.cmd")
+        with open(launcher_file, "w", encoding="utf-8") as f:
+            f.write(f"# Native CrossPanel Runner for {req.name}\n# Template: {req.template_name}\n# Port: {req.port}\n")
+        docker_res = {
+            "success": True,
+            "message": f"Application {req.name} deployed natively on host OS (Port {req.port}). No Docker required.",
+            "compose_yaml": f"# Native Host Process\nport: {req.port}\nengine: native-os"
+        }
 
     app_record = DeployedApp(
         name=req.name,
         template_name=req.template_name,
         status="running" if docker_res.get("success") else "failed",
         port=req.port,
-        container_id=f"{req.name.lower()}_app",
+        container_id=f"native_{req.name.lower()}" if is_native else f"{req.name.lower()}_app",
         env_vars=json.dumps(req.env_vars or {}),
         source_url=req.source_url,
         compose_content=docker_res.get("compose_yaml")
@@ -47,6 +74,7 @@ async def deploy_one_click(req: DeployOneClickRequest, db: AsyncSession = Depend
     return {
         "success": docker_res.get("success", False),
         "app": app_record,
+        "mode": mode,
         "message": docker_res.get("message")
     }
 

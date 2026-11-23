@@ -237,9 +237,9 @@ const apps = [
 type App = (typeof apps)[number];
 
 const initialInstalled = [
-  { id: "wordpress-site", app: "WordPress", skill: "wordpress", version: "6.6", port: "8080", running: true },
-  { id: "fastapi-api", app: "FastAPI", skill: "fastapi", version: "0.115", port: "8000", running: true },
-  { id: "postgres-main", app: "PostgreSQL", skill: "postgres", version: "16", port: "5432", running: true },
+  { id: "wordpress-site", app: "WordPress", skill: "wordpress", version: "6.6", port: "8080", running: true, mode: "native" },
+  { id: "fastapi-api", app: "FastAPI", skill: "fastapi", version: "0.115", port: "8000", running: true, mode: "native" },
+  { id: "postgres-main", app: "PostgreSQL", skill: "postgres", version: "16", port: "5432", running: true, mode: "docker" },
 ];
 
 const tabs = [
@@ -280,6 +280,7 @@ export function ApplicationsWorkspace() {
                 version: "latest",
                 port: String(a.port || 80),
                 running: a.status === "running",
+                mode: a.container_id?.startsWith("native_") ? "native" : "docker",
               }))
             );
           }
@@ -484,7 +485,12 @@ export function ApplicationsWorkspace() {
                   <SkillIcon name={item.skill || item.app} size={36} />
                 </div>
                 <div className="min-w-0 flex-1 basis-40">
-                  <h3 className="break-words font-semibold text-sm">{item.id}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="break-words font-semibold text-sm">{item.id}</h3>
+                    <Pill tone={(item as any).mode === "docker" ? "primary" : "success"}>
+                      {(item as any).mode === "docker" ? "Docker" : "Native OS"}
+                    </Pill>
+                  </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {item.app} {item.version} · Port <span className="font-mono text-foreground">{item.port}</span>
                   </p>

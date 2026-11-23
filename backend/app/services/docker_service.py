@@ -236,13 +236,19 @@ services:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await proc.communicate()
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=3.0)
             return {
                 "success": proc.returncode == 0,
                 "stdout": stdout.decode("utf-8", errors="ignore").strip(),
                 "stderr": stderr.decode("utf-8", errors="ignore").strip(),
                 "exit_code": proc.returncode
             }
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return {"success": False, "stdout": "", "stderr": "Command timed out", "exit_code": -1}
         except FileNotFoundError:
             return {"success": False, "stdout": "", "stderr": f"Command not found: {cmd_list[0]}", "exit_code": -1}
         except Exception as e:
@@ -250,8 +256,13 @@ services:
 
     @classmethod
     async def is_docker_running(cls) -> bool:
-        res = await cls.run_cmd(["docker", "info"])
-        return res["success"]
+        if not shutil.which("docker"):
+            return False
+        try:
+            res = await cls.run_cmd(["docker", "info"])
+            return res.get("success", False)
+        except Exception:
+            return False
 
     @classmethod
     async def list_containers(cls) -> List[Dict[str, Any]]:

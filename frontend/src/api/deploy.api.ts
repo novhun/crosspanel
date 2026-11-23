@@ -10,9 +10,10 @@ export const deployApi = {
     name: string;
     template_name: string;
     port: number;
+    mode?: "native" | "docker";
     env_vars?: Record<string, string>;
-  }) => apiClient.post<{ success: boolean; app: DeployedApp; message?: string }>("/deploy/one-click", payload),
+  }) => apiClient.post<{ success: boolean; app: DeployedApp; mode?: string; message?: string }>("/deploy/one-click", payload),
 
-  deployGit: (payload: GitDeployPayload) =>
+  deployGit: (payload: GitDeployPayload & { mode?: "native" | "docker" }) =>
     apiClient.post<{ success: boolean; message: string; log?: string }>("/deploy/git", payload),
 };

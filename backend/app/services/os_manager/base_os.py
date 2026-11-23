@@ -34,6 +34,11 @@ class BaseOSManager(ABC):
         pass
 
     @abstractmethod
+    async def install_service(self, service_name: str) -> Dict[str, Any]:
+        """Install a native service/package using the host OS package manager."""
+        pass
+
+    @abstractmethod
     async def list_services(self) -> List[Dict[str, Any]]:
         """List commonly monitored services and their statuses."""
         pass

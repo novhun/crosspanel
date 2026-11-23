@@ -66,6 +66,15 @@ class UnifiedOSManager(BaseOSManager):
         else:
             return await LinuxCommands.restart_service(service_name)
 
+    async def install_service(self, service_name: str) -> Dict[str, Any]:
+        os_type = self.os_name
+        if os_type == "windows":
+            return await WindowsCommands.install_service(service_name)
+        elif os_type == "mac":
+            return await MacCommands.install_service(service_name)
+        else:
+            return await LinuxCommands.install_service(service_name)
+
     async def list_services(self) -> List[Dict[str, Any]]:
         services = ["nginx", "php-fpm", "mariadb", "docker"]
         res = []

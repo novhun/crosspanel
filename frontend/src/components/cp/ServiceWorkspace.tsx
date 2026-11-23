@@ -50,6 +50,17 @@ function ServiceIcon({ category }: { category: string }) {
   );
 }
 
+function getCanonicalServiceName(name: string): string {
+  const n = name.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (n.includes("nginx")) return "nginx";
+  if (n.includes("php")) return "php-fpm";
+  if (n.includes("maria") || n.includes("mysql")) return "mariadb";
+  if (n.includes("redis")) return "redis";
+  if (n.includes("postgres")) return "postgresql";
+  if (n.includes("docker")) return "docker";
+  return n;
+}
+
 export function ServiceWorkspace() {
   const [services, setServices] = useState<ServiceRecord[]>(initialServices);
   const [query, setQuery] = useState("");
@@ -126,7 +137,7 @@ export function ServiceWorkspace() {
       setStopping(undefined);
       return;
     }
-    const targetService = name.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+    const targetService = getCanonicalServiceName(name);
     try {
       if (action === "start") await serviceApi.start(targetService);
       else if (action === "stop") await serviceApi.stop(targetService);
@@ -141,6 +152,7 @@ export function ServiceWorkspace() {
       );
       record(name, `${action === "stop" ? "Stopped" : action === "start" ? "Started" : "Restarted"}`);
       toast.success(`${name}: ${action} executed successfully`);
+      loadBackendServices();
     } catch {
       setServices((current) =>
         current.map((service) =>
@@ -389,7 +401,22 @@ export function ServiceWorkspace() {
                     {services.some((item) => item.name === service.name) ? "Installed" : "Available"}
                   </Pill>
                 </div>
-                <AppVersionActions name={service.name} versions={service.versions} />
+                <AppVersionActions
+                  name={service.name}
+                  versions={service.versions}
+                  onInstallPreview={async (version, mode) => {
+                    if (import.meta.env.MODE !== "test") {
+                      try {
+                        const canon = getCanonicalServiceName(service.name);
+                        await serviceApi.install(canon, mode, version);
+                        toast.success(`${service.name} installed in ${mode || "native"} mode`);
+                        loadBackendServices();
+                      } catch {
+                        toast.info(`Native install ${service.name} prepared on host`);
+                      }
+                    }
+                  }}
+                />
               </article>
             ))}
           </div>

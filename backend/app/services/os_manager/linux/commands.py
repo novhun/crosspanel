@@ -100,6 +100,26 @@ class LinuxCommands:
         }
 
     @classmethod
+    async def install_service(cls, service_name: str) -> Dict[str, Any]:
+        linux_pkg_map = {
+            "nginx": "nginx",
+            "php-fpm": "php8.2-fpm",
+            "mariadb": "mariadb-server",
+            "redis": "redis-server",
+            "postgresql": "postgresql postgresql-contrib",
+            "nodejs": "nodejs npm"
+        }
+        pkg = linux_pkg_map.get(service_name.lower(), service_name.lower())
+        cmd = f"which apt-get >/dev/null 2>&1 && (DEBIAN_FRONTEND=noninteractive apt-get update -y && apt-get install -y {pkg}) || (yum install -y {pkg})"
+        res = await cls.run_bash(cmd)
+        return {
+            "success": res["success"],
+            "package": pkg,
+            "manager": "apt/yum",
+            "message": f"Native package {service_name} ({pkg}) installed on Linux." if res["success"] else res["stderr"]
+        }
+
+    @classmethod
     async def get_firewall_rules(cls) -> List[Dict[str, Any]]:
         cmd = "ufw status numbered"
         res = await cls.run_bash(cmd)

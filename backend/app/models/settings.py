@@ -132,3 +132,18 @@ class DatabaseBackup(Base):
     file_path = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     notes = Column(String(255), nullable=True)
+
+class ManagedDatabase(Base):
+    __tablename__ = "managed_databases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, index=True, nullable=False)
+    engine = Column(String(50), default="MariaDB") # MariaDB, PostgreSQL, SQLite, Redis, MongoDB
+    user = Column(String(100), default="root")
+    host = Column(String(100), default="127.0.0.1")
+    port = Column(Integer, default=3306)
+    size_mb = Column(Integer, default=12)
+    tables_count = Column(Integer, default=4)
+    run_mode = Column(String(20), default="native") # native or docker
+    created_at = Column(DateTime, default=datetime.utcnow)
+
