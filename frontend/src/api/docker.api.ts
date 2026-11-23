@@ -28,6 +28,7 @@ export interface DockerContainer {
   Ports?: string;
   Created?: string | number;
   CreatedAt?: string;
+  Command?: string;
 }
 
 export interface DockerImage {
@@ -54,6 +55,24 @@ export interface DockerNetwork {
   Scope?: string;
   Subnet?: string;
   Gateway?: string;
+  IPv6?: string;
+  Internal?: string;
+}
+
+export interface DockerComposeStack {
+  name: string;
+  status: string;
+  config_files: string;
+  dir: string;
+  services: number;
+}
+
+export interface DockerRepository {
+  name: string;
+  url: string;
+  user: string;
+  status: string;
+  isDefault: boolean;
 }
 
 export interface DockerSettings {
@@ -87,30 +106,50 @@ export const dockerApi = {
   getImages: () => apiClient.get<DockerImage[]>("/docker/images"),
 
   pullImage: (image: string, tag: string = "latest") =>
-    apiClient.post<{ success: boolean; message: string }>("/docker/images/pull", { image, tag }),
+    apiClient.post<{ success: boolean; message: string; output?: string }>("/docker/images/pull", { image, tag }),
 
-  deleteImage: (id: string) => apiClient.delete<{ success: boolean; message: string }>(`/docker/images/${id}`),
+  deleteImage: (id: string, force: boolean = false) =>
+    apiClient.delete<{ success: boolean; message: string }>(`/docker/images/${id}?force=${force}`),
 
   getVolumes: () => apiClient.get<DockerVolume[]>("/docker/volumes"),
 
   createVolume: (name: string, driver: string = "local") =>
-    apiClient.post<{ success: boolean; name: string }>("/docker/volumes/create", { name, driver }),
+    apiClient.post<{ success: boolean; name: string; message?: string }>("/docker/volumes/create", { name, driver }),
 
-  deleteVolume: (name: string) => apiClient.delete<{ success: boolean }>(`/docker/volumes/${name}`),
+  deleteVolume: (name: string) => apiClient.delete<{ success: boolean; message?: string }>(`/docker/volumes/${name}`),
 
-  pruneVolumes: () => apiClient.post<{ success: boolean }>("/docker/volumes/prune"),
+  pruneVolumes: () => apiClient.post<{ success: boolean; output?: string }>("/docker/volumes/prune"),
 
   getNetworks: () => apiClient.get<DockerNetwork[]>("/docker/networks"),
 
   createNetwork: (payload: { name: string; driver: string; subnet?: string; gateway?: string }) =>
-    apiClient.post<{ success: boolean; name: string }>("/docker/networks/create", payload),
+    apiClient.post<{ success: boolean; name: string; message?: string }>("/docker/networks/create", payload),
 
-  deleteNetwork: (id: string) => apiClient.delete<{ success: boolean }>(`/docker/networks/${id}`),
+  deleteNetwork: (id: string) => apiClient.delete<{ success: boolean; message?: string }>(`/docker/networks/${id}`),
+
+  getComposeStacks: () => apiClient.get<DockerComposeStack[]>("/docker/compose"),
+
+  deployCompose: (payload: { name: string; compose_yaml: string }) =>
+    apiClient.post<{ success: boolean; message: string }>("/docker/compose/deploy", payload),
+
+  composeAction: (projectName: string, action: "start" | "stop" | "restart" | "down" | "pull") =>
+    apiClient.post<{ success: boolean; message: string }>(`/docker/compose/${projectName}/action`, { action }),
+
+  getComposeConfig: (projectName: string) =>
+    apiClient.get<{ name: string; compose_yaml: string; path: string }>(`/docker/compose/${projectName}/config`),
+
+  deployTemplate: (payload: { name: string; template: string; port: number; env?: Record<string, string> }) =>
+    apiClient.post<{ success: boolean; message: string }>("/docker/templates/deploy", payload),
+
+  getRepositories: () => apiClient.get<DockerRepository[]>("/docker/repositories"),
+
+  loginRepository: (payload: { server: string; username: string; password: string }) =>
+    apiClient.post<{ success: boolean; message: string }>("/docker/repositories/login", payload),
 
   getSettings: () => apiClient.get<DockerSettings>("/docker/settings"),
 
   updateSettings: (payload: Partial<DockerSettings>) =>
-    apiClient.post<{ success: boolean; message: string }>("/docker/settings", payload),
+    apiClient.post<{ success: boolean; message: string; settings?: any; daemon_json?: string }>("/docker/settings", payload),
 
   daemonAction: (action: "start" | "restart" | "repair") =>
     apiClient.post<{ success: boolean; message: string }>(`/docker/daemon/${action}`),

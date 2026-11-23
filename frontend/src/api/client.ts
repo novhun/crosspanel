@@ -15,10 +15,13 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const url = `${BASE_URL}${cleanEndpoint}`;
 
+  const token = typeof window !== "undefined" ? localStorage.getItem("cp_token") : null;
+
   const config: RequestInit = {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
     signal: controller.signal,

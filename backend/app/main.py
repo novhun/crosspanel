@@ -2,7 +2,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.db.database import init_db
+from app.db.database import init_db, AsyncSessionLocal
+from app.services.auth_service import AuthService
 from app.controllers import (
     system_controller,
     service_controller,
@@ -12,13 +13,17 @@ from app.controllers import (
     automation_controller,
     file_controller,
     terminal_controller,
-    docker_controller
+    docker_controller,
+    auth_controller,
+    user_controller
 )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize Database
     await init_db()
+    async with AsyncSessionLocal() as session:
+        await AuthService.ensure_default_admin(session)
     yield
     # Shutdown logic if any
 
@@ -48,6 +53,8 @@ app.include_router(automation_controller.router, prefix=settings.API_PREFIX)
 app.include_router(file_controller.router, prefix=settings.API_PREFIX)
 app.include_router(terminal_controller.router, prefix=settings.API_PREFIX)
 app.include_router(docker_controller.router, prefix=settings.API_PREFIX)
+app.include_router(auth_controller.router, prefix=settings.API_PREFIX)
+app.include_router(user_controller.router, prefix=settings.API_PREFIX)
 
 @app.get("/")
 async def root():

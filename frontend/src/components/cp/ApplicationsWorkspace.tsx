@@ -266,26 +266,28 @@ export function ApplicationsWorkspace() {
   );
 
   useEffect(() => {
-    deployApi
-      .getApps()
-      .then((liveApps) => {
-        if (Array.isArray(liveApps) && liveApps.length > 0) {
-          setIsLive(true);
-          setInstalled(
-            liveApps.map((a) => ({
-              id: a.name,
-              app: a.template_name || a.name,
-              skill: a.template_name?.toLowerCase() || "docker",
-              version: "latest",
-              port: String(a.port || 80),
-              running: a.status === "running",
-            }))
-          );
-        }
-      })
-      .catch(() => {
-        setIsLive(false);
-      });
+    if (import.meta.env.MODE !== "test") {
+      deployApi
+        .getApps()
+        .then((liveApps) => {
+          if (Array.isArray(liveApps) && liveApps.length > 0) {
+            setIsLive(true);
+            setInstalled(
+              liveApps.map((a) => ({
+                id: a.name,
+                app: a.template_name || a.name,
+                skill: a.template_name?.toLowerCase() || "docker",
+                version: "latest",
+                port: String(a.port || 80),
+                running: a.status === "running",
+              }))
+            );
+          }
+        })
+        .catch(() => {
+          setIsLive(false);
+        });
+    }
   }, []);
 
   const preview = (action: string) =>
@@ -563,7 +565,7 @@ export function ApplicationsWorkspace() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                preview(`deploying from ${source}: ${sourceValue}`);
+                preview(`source deployment from ${source}`);
               }}
             >
               <label className="block space-y-2 text-sm">
@@ -590,7 +592,7 @@ export function ApplicationsWorkspace() {
                 />
               </label>
               <Button disabled={!sourceValue.trim()} className="mt-5" type="submit">
-                <Play className="mr-1 size-4" />Deploy Container
+                <Play className="mr-1 size-4" />Preview deployment
               </Button>
             </form>
           </section>

@@ -20,6 +20,7 @@ import { Route as DatabasesRouteImport } from './routes/databases'
 import { Route as DeploymentsRouteImport } from './routes/deployments'
 import { Route as DockerRouteImport } from './routes/docker'
 import { Route as FilesRouteImport } from './routes/files'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as SecurityRouteImport } from './routes/security'
 import { Route as ServiceRouteImport } from './routes/service'
@@ -85,6 +86,11 @@ const DockerRoute = DockerRouteImport.update({
 const FilesRoute = FilesRouteImport.update({
   id: '/files',
   path: '/files',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LogsRoute = LogsRouteImport.update({
@@ -156,6 +162,7 @@ export interface FileRoutesByFullPath {
   '/deployments': typeof DeploymentsRoute
   '/docker': typeof DockerRoute
   '/files': typeof FilesRoute
+  '/login': typeof LoginRoute
   '/logs': typeof LogsRoute
   '/security': typeof SecurityRoute
   '/service': typeof ServiceRoute
@@ -180,6 +187,7 @@ export interface FileRoutesByTo {
   '/deployments': typeof DeploymentsRoute
   '/docker': typeof DockerRoute
   '/files': typeof FilesRoute
+  '/login': typeof LoginRoute
   '/logs': typeof LogsRoute
   '/security': typeof SecurityRoute
   '/service': typeof ServiceRoute
@@ -205,6 +213,7 @@ export interface FileRoutesById {
   '/deployments': typeof DeploymentsRoute
   '/docker': typeof DockerRoute
   '/files': typeof FilesRoute
+  '/login': typeof LoginRoute
   '/logs': typeof LogsRoute
   '/security': typeof SecurityRoute
   '/service': typeof ServiceRoute
@@ -231,6 +240,7 @@ export interface FileRouteTypes {
     | '/deployments'
     | '/docker'
     | '/files'
+    | '/login'
     | '/logs'
     | '/security'
     | '/service'
@@ -255,6 +265,7 @@ export interface FileRouteTypes {
     | '/deployments'
     | '/docker'
     | '/files'
+    | '/login'
     | '/logs'
     | '/security'
     | '/service'
@@ -279,6 +290,7 @@ export interface FileRouteTypes {
     | '/deployments'
     | '/docker'
     | '/files'
+    | '/login'
     | '/logs'
     | '/security'
     | '/service'
@@ -304,6 +316,7 @@ export interface RootRouteChildren {
   DeploymentsRoute: typeof DeploymentsRoute
   DockerRoute: typeof DockerRoute
   FilesRoute: typeof FilesRoute
+  LoginRoute: typeof LoginRoute
   LogsRoute: typeof LogsRoute
   SecurityRoute: typeof SecurityRoute
   ServiceRoute: typeof ServiceRoute
@@ -394,6 +407,13 @@ declare module '@tanstack/react-router' {
       path: '/files'
       fullPath: '/files'
       preLoaderRoute: typeof FilesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/logs': {
@@ -488,6 +508,7 @@ const rootRouteChildren: RootRouteChildren = {
   DeploymentsRoute: DeploymentsRoute,
   DockerRoute: DockerRoute,
   FilesRoute: FilesRoute,
+  LoginRoute: LoginRoute,
   LogsRoute: LogsRoute,
   SecurityRoute: SecurityRoute,
   ServiceRoute: ServiceRoute,

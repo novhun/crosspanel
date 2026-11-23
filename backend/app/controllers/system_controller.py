@@ -18,10 +18,51 @@ from app.schemas.server_stats import (
     DiskPartitionInfo,
     NetInterfaceInfo
 )
+from pydantic import BaseModel
+
+class GeneralSettingsPayload(BaseModel):
+    panel_name: Optional[str] = None
+    panel_port: Optional[str] = None
+    target_os: Optional[str] = None
+    timezone: Optional[str] = None
+    terminal_enabled: Optional[bool] = None
+    two_factor_auth: Optional[bool] = None
+    auto_updates: Optional[bool] = None
+    login_path: Optional[str] = None
 from app.services.os_manager.factory import os_manager_factory
 from app.core.config import settings
 
 router = APIRouter(prefix="/system", tags=["System & Metrics"])
+
+@router.get("/settings")
+async def get_general_settings(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(SystemSetting))
+    rows = result.scalars().all()
+    setting_map = {r.key: r.value for r in rows}
+    return {
+        "panel_name": setting_map.get("panel_name", settings.PROJECT_NAME),
+        "panel_port": setting_map.get("panel_port", str(settings.PORT)),
+        "target_os": setting_map.get("target_os", "Linux (systemd)"),
+        "timezone": setting_map.get("timezone", "UTC"),
+        "terminal_enabled": setting_map.get("terminal_enabled", "true") == "true",
+        "two_factor_auth": setting_map.get("two_factor_auth", "false") == "true",
+        "auto_updates": setting_map.get("auto_updates", "true") == "true",
+        "login_path": setting_map.get("login_path", "/login"),
+    }
+
+@router.post("/settings")
+async def save_general_settings(payload: GeneralSettingsPayload, db: AsyncSession = Depends(get_db)):
+    data = payload.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        val_str = str(v).lower() if isinstance(v, bool) else str(v)
+        res = await db.execute(select(SystemSetting).where(SystemSetting.key == k))
+        item = res.scalars().first()
+        if item:
+            item.value = val_str
+        else:
+            db.add(SystemSetting(key=k, value=val_str))
+    await db.commit()
+    return {"success": True, "message": "Settings saved to database"}
 
 @router.get("/status", response_model=SystemStatus)
 async def get_system_status():

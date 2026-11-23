@@ -1,11 +1,12 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
-import { Menu, SquareTerminal, Bell, ChevronDown, Server, Sprout, Heart } from "lucide-react";
+import { Menu, SquareTerminal, Bell, Server, Sprout, Heart } from "lucide-react";
 import { mainNav, mgmtNav } from "./nav";
 import { cn } from "@/lib/utils";
 import { ThemeSwitcher } from "./theme";
 import { SearchPalette } from "./SearchPalette";
 import { MobileNav } from "./MobileNav";
+import { UserMenu } from "./UserMenu";
 
 function NavItem({ item, collapsed, active }: { item: (typeof mainNav)[number] | (typeof mgmtNav)[number]; collapsed: boolean; active: boolean }) {
   const Icon = item.icon;
@@ -28,6 +29,11 @@ function NavItem({ item, collapsed, active }: { item: (typeof mainNav)[number] |
 export function AppShell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const path = useRouterState({ select: (r) => r.location.pathname });
+
+  if (path === "/login") {
+    return <main className="min-h-screen w-full">{children}</main>;
+  }
+
   return (
     <div className="flex min-h-screen w-full">
       <aside className={cn("sticky top-0 hidden h-screen shrink-0 flex-col border-r border-sidebar-border bg-sidebar backdrop-blur-xl transition-all md:flex", collapsed ? "w-[76px]" : "w-60")}>
@@ -69,14 +75,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <span className="absolute -right-1 -top-1 grid h-4 w-4 place-items-center rounded-full bg-destructive text-[10px] font-bold">3</span>
             </button>
             <div className="hidden sm:block"><ThemeSwitcher /></div>
-            <div className="flex items-center gap-2 pl-2">
-              <div className="grid h-9 w-9 place-items-center rounded-full bg-gradient-primary font-bold">NH</div>
-              <div className="hidden leading-tight lg:block">
-                <div className="text-sm font-semibold">Nov Hun</div>
-                <div className="flex items-center gap-1 text-[11px] text-success"><span className="h-1.5 w-1.5 rounded-full bg-success" />Online</div>
-              </div>
-              <ChevronDown className="hidden h-4 w-4 text-muted-foreground sm:block" />
-            </div>
+            <UserMenu />
           </div>
         </header>
         <main className="min-w-0 flex-1 p-3 pb-28 sm:p-4 md:p-6 md:pb-6">{children}</main>

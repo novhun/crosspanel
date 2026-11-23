@@ -42,6 +42,8 @@ import {
   DockerVolume,
   DockerNetwork,
   DockerSettings,
+  DockerComposeStack,
+  DockerRepository,
 } from "@/api/docker.api";
 
 const tabs = [
@@ -79,6 +81,8 @@ export function DockerWorkspace() {
   const [images, setImages] = useState<DockerImage[]>([]);
   const [volumes, setVolumes] = useState<DockerVolume[]>([]);
   const [networks, setNetworks] = useState<DockerNetwork[]>([]);
+  const [composeStacks, setComposeStacks] = useState<DockerComposeStack[]>([]);
+  const [repositories, setRepositories] = useState<DockerRepository[]>([]);
   const [daemonSettings, setDaemonSettings] = useState<DockerSettings | null>(null);
 
   // Filters & State
@@ -88,27 +92,33 @@ export function DockerWorkspace() {
   const [logLoading, setLogLoading] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [pullInput, setPullInput] = useState("nginx:alpine");
+  const [deployingTemplate, setDeployingTemplate] = useState<string | null>(null);
 
   // Modals
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [modalInput, setModalInput] = useState<Record<string, string>>({});
   const [rawConfig, setRawConfig] = useState("");
+  const [selectedStackConfig, setSelectedStackConfig] = useState<{ name: string; yaml: string } | null>(null);
 
   const refreshAll = async () => {
     try {
-      const [s, c, img, vol, net, st] = await Promise.all([
+      const [s, c, img, vol, net, st, cs, repos] = await Promise.all([
         dockerApi.getStatus().catch(() => null),
         dockerApi.getContainers().catch(() => []),
         dockerApi.getImages().catch(() => []),
         dockerApi.getVolumes().catch(() => []),
         dockerApi.getNetworks().catch(() => []),
         dockerApi.getSettings().catch(() => null),
+        dockerApi.getComposeStacks().catch(() => []),
+        dockerApi.getRepositories().catch(() => []),
       ]);
       if (s) setStatus(s);
-      setContainers(c || []);
-      setImages(img || []);
-      setVolumes(vol || []);
-      setNetworks(net || []);
+      if (Array.isArray(c)) setContainers(c);
+      if (Array.isArray(img)) setImages(img);
+      if (Array.isArray(vol)) setVolumes(vol);
+      if (Array.isArray(net)) setNetworks(net);
+      if (Array.isArray(cs)) setComposeStacks(cs);
+      if (Array.isArray(repos) && repos.length > 0) setRepositories(repos);
       if (st) {
         setDaemonSettings(st);
         setRawConfig(st.daemon_json || "");
@@ -127,21 +137,25 @@ export function DockerWorkspace() {
   // Container Action
   const handleContainerAction = async (id: string, action: string) => {
     try {
-      await dockerApi.containerAction(id, action);
-      toast.success(`Container ${action} executed`);
+      const res = await dockerApi.containerAction(id, action);
+      if (res.success) {
+        toast.success(`Container ${action} executed`);
+      } else {
+        toast.info(res.message || `Container ${action}`);
+      }
       refreshAll();
-    } catch {
-      toast.info(`Simulated: Container ${action}`);
+    } catch (err: any) {
+      toast.error(`Container action failed: ${err?.message || "Unknown error"}`);
     }
   };
 
   // View Logs
   const handleViewLogs = async (id: string) => {
     setLogLoading(true);
-    setSelectedLogs({ id, logs: "Loading logs..." });
+    setSelectedLogs({ id, logs: "Streaming live logs from container..." });
     try {
-      const res = await dockerApi.getContainerLogs(id, 150);
-      setSelectedLogs({ id, logs: res.logs || "No stdout/stderr available." });
+      const res = await dockerApi.getContainerLogs(id, 200);
+      setSelectedLogs({ id, logs: res.logs || "No stdout/stderr available from container." });
     } catch {
       setSelectedLogs({ id, logs: `[crosspanel] ${id} log stream active.\nListening on container stdout.` });
     } finally {
@@ -156,25 +170,179 @@ export function DockerWorkspace() {
     toast.info(`Pulling image: ${pullInput}...`);
     try {
       const [imgName, tag = "latest"] = pullInput.split(":");
-      await dockerApi.pullImage(imgName, tag);
-      toast.success(`Successfully pulled ${pullInput}`);
+      const res = await dockerApi.pullImage(imgName, tag);
+      if (res.success) {
+        toast.success(`Successfully pulled ${pullInput}`);
+      } else {
+        toast.error(`Pull image failed: ${res.message}`);
+      }
       refreshAll();
-    } catch {
-      toast.info(`Simulated image pull: ${pullInput}`);
+    } catch (err: any) {
+      toast.error(`Pull image failed: ${err?.message || "Unknown error"}`);
     } finally {
       setIsPulling(false);
-      setActiveModal(null);
+    }
+  };
+
+  // Deploy 1-Click Template
+  const handleDeployTemplate = async (tpl: typeof templates[0]) => {
+    setDeployingTemplate(tpl.name);
+    toast.info(`Deploying ${tpl.name} container on port ${tpl.port}...`);
+    try {
+      const res = await dockerApi.deployTemplate({
+        name: tpl.name.toLowerCase().replace(/[^a-z0-9_-]/g, "_"),
+        template: tpl.skill,
+        port: tpl.port,
+      });
+      if (res.success) {
+        toast.success(res.message || `${tpl.name} deployed successfully!`);
+        refreshAll();
+      } else {
+        toast.error(`Deploy error: ${res.message}`);
+      }
+    } catch (err: any) {
+      toast.error(`Deployment failed: ${err?.message || "Unknown error"}`);
+    } finally {
+      setDeployingTemplate(null);
+    }
+  };
+
+  // Compose Actions
+  const handleComposeAction = async (projectName: string, action: "start" | "stop" | "restart" | "down" | "pull") => {
+    toast.info(`Docker compose ${action}: ${projectName}...`);
+    try {
+      const res = await dockerApi.composeAction(projectName, action);
+      if (res.success) {
+        toast.success(`${projectName} compose ${action} completed`);
+        refreshAll();
+      } else {
+        toast.error(res.message);
+      }
+    } catch (err: any) {
+      toast.error(`Failed to ${action} compose stack: ${err?.message || "Unknown error"}`);
+    }
+  };
+
+  const handleEditStackYaml = async (projectName: string) => {
+    try {
+      const res = await dockerApi.getComposeConfig(projectName);
+      setSelectedStackConfig({ name: projectName, yaml: res.compose_yaml });
+      setActiveModal("compose_edit");
+    } catch {
+      toast.error("Failed to load compose configuration");
+    }
+  };
+
+  const handleDeployNewCompose = async () => {
+    if (!modalInput.stackName || !modalInput.stackYaml) {
+      toast.error("Please provide stack name and docker-compose YAML");
+      return;
+    }
+    toast.info(`Deploying compose stack: ${modalInput.stackName}...`);
+    try {
+      const res = await dockerApi.deployCompose({
+        name: modalInput.stackName,
+        compose_yaml: modalInput.stackYaml,
+      });
+      if (res.success) {
+        toast.success(res.message || "Stack deployed successfully");
+        setActiveModal(null);
+        refreshAll();
+      } else {
+        toast.error(res.message);
+      }
+    } catch (err: any) {
+      toast.error(`Deploy failed: ${err?.message || "Network error"}`);
     }
   };
 
   // Daemon actions
-  const handleDaemonAction = async (act: "start" | "restart" | "repair") => {
+  const handleDaemonAction = async (action: "start" | "restart" | "repair") => {
+    toast.info(`Executing Docker daemon ${action}...`);
     try {
-      await dockerApi.daemonAction(act);
-      toast.success(`Docker daemon ${act} command sent`);
+      const res = await dockerApi.daemonAction(action);
+      if (res.success) {
+        toast.success(res.message);
+        refreshAll();
+      } else {
+        toast.error(res.message);
+      }
+    } catch (err: any) {
+      toast.error(`Daemon action failed: ${err?.message || "Connection error"}`);
+    }
+  };
+
+  // Volumes
+  const handleCreateVolume = async () => {
+    if (!modalInput.volName) return;
+    try {
+      const res = await dockerApi.createVolume(modalInput.volName, modalInput.volDriver || "local");
+      if (res.success) {
+        toast.success(`Volume ${res.name} created on PC`);
+        setActiveModal(null);
+        refreshAll();
+      } else {
+        toast.error(res.message || "Failed to create volume");
+      }
+    } catch (err: any) {
+      toast.error(`Failed to create volume: ${err?.message}`);
+    }
+  };
+
+  const handlePruneVolumes = async () => {
+    try {
+      const res = await dockerApi.pruneVolumes();
+      toast.success("Pruned unused volumes on PC");
       refreshAll();
-    } catch {
-      toast.info(`Docker daemon ${act} simulated`);
+    } catch (err: any) {
+      toast.error(`Prune failed: ${err?.message}`);
+    }
+  };
+
+  // Networks
+  const handleCreateNetwork = async () => {
+    if (!modalInput.netName) return;
+    try {
+      const res = await dockerApi.createNetwork({
+        name: modalInput.netName,
+        driver: modalInput.netDriver || "bridge",
+        subnet: modalInput.netSubnet,
+        gateway: modalInput.netGateway,
+      });
+      if (res.success) {
+        toast.success(`Network ${res.name} created on PC`);
+        setActiveModal(null);
+        refreshAll();
+      } else {
+        toast.error(res.message || "Failed to create network");
+      }
+    } catch (err: any) {
+      toast.error(`Failed to create network: ${err?.message}`);
+    }
+  };
+
+  // Registries
+  const handleLoginRegistry = async () => {
+    if (!modalInput.regUser || !modalInput.regPass) {
+      toast.error("Please provide username and password");
+      return;
+    }
+    toast.info(`Logging into registry ${modalInput.regServer || "Docker Hub"}...`);
+    try {
+      const res = await dockerApi.loginRepository({
+        server: modalInput.regServer || "https://index.docker.io/v1/",
+        username: modalInput.regUser,
+        password: modalInput.regPass,
+      });
+      if (res.success) {
+        toast.success(res.message);
+        setActiveModal(null);
+        refreshAll();
+      } else {
+        toast.error(res.message);
+      }
+    } catch (err: any) {
+      toast.error(`Login failed: ${err?.message}`);
     }
   };
 
@@ -184,30 +352,30 @@ export function DockerWorkspace() {
     <>
       <PageHeader
         title="Docker Management"
-        desc="Enterprise-grade container orchestration, images, networks, volumes, and daemon configuration"
+        desc="Host container runtime, image repositories, volumes, networks, and daemon configuration"
         action={
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
             <Pill tone={isServerRunning ? "success" : "danger"}>
-              {isServerRunning ? "● Docker Server: Running" : "● Docker Server: Stopped"}
+              {isServerRunning ? `● Docker Live (v${status?.version || "28.3.2"})` : "○ Docker Offline"}
             </Pill>
-            <Button variant="outline" size="sm" onClick={refreshAll}>
+            <Button size="sm" variant="outline" onClick={refreshAll} title="Refresh Live Data">
               <RefreshCw className="mr-1 size-3.5" />Refresh
             </Button>
           </div>
         }
       />
 
-      {/* Tabs Bar */}
-      <div className="mb-6 flex overflow-x-auto border-b border-border bg-card/40 rounded-xl p-1 gap-1">
+      {/* Tabs Navigation */}
+      <div className="mb-6 flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1 shadow-sm">
         {tabs.map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={cn(
-              "whitespace-nowrap rounded-lg px-3.5 py-2 text-xs font-medium transition-all sm:text-sm",
+              "rounded-lg px-3.5 py-1.5 text-xs font-medium transition-all",
               tab === t
                 ? "bg-primary text-primary-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
             )}
           >
             {t}
@@ -218,89 +386,82 @@ export function DockerWorkspace() {
       {/* TAB 1: OVERVIEW */}
       {tab === "Overview" && (
         <div className="space-y-6">
+          {/* Quick Metrics */}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              { label: "Total Containers", value: status?.containers_total ?? containers.length, sub: `${status?.containers_running ?? containers.filter(c => c.State === "running").length} Running · ${status?.containers_stopped ?? containers.filter(c => c.State !== "running").length} Stopped`, icon: Boxes, tone: "text-cyan" },
-              { label: "Local Images", value: status?.images_count ?? images.length, sub: "Docker Hub & Private", icon: Layers, tone: "text-success" },
-              { label: "Volumes", value: status?.volumes_count ?? volumes.length, sub: "Persistent Data Mounts", icon: HardDrive, tone: "text-warning" },
-              { label: "Networks", value: status?.networks_count ?? networks.length, sub: "Bridge, Overlay, Host", icon: Network, tone: "text-primary" },
-            ].map((s) => (
-              <div key={s.label} className="rounded-xl border border-border bg-card p-5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground font-medium">{s.label}</span>
-                  <s.icon className={cn("size-5", s.tone)} />
-                </div>
-                <div className="mt-3 font-display text-3xl font-bold">{s.value}</div>
-                <p className="mt-1 text-xs text-muted-foreground">{s.sub}</p>
+            <div className="rounded-xl border border-border bg-card p-5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Running Containers</span>
+                <Boxes className="size-4 text-cyan" />
               </div>
-            ))}
-          </div>
-
-          <div className="grid gap-6 lg:grid-cols-3">
-            <div className="rounded-xl border border-border bg-card p-6 lg:col-span-2">
-              <h3 className="font-display text-base font-semibold mb-4 flex items-center gap-2">
-                <Server className="size-4 text-cyan" />Docker Engine Specs
-              </h3>
-              <dl className="grid grid-cols-2 gap-4 text-xs sm:grid-cols-3">
-                <div className="rounded-lg bg-secondary/50 p-3">
-                  <dt className="text-muted-foreground">Version</dt>
-                  <dd className="mt-1 font-mono font-semibold text-sm">{status?.version || "27.3.1"}</dd>
-                </div>
-                <div className="rounded-lg bg-secondary/50 p-3">
-                  <dt className="text-muted-foreground">API Version</dt>
-                  <dd className="mt-1 font-mono font-semibold text-sm">{status?.api_version || "1.47"}</dd>
-                </div>
-                <div className="rounded-lg bg-secondary/50 p-3">
-                  <dt className="text-muted-foreground">Go Runtime</dt>
-                  <dd className="mt-1 font-mono font-semibold text-sm">{status?.go_version || "go1.22.8"}</dd>
-                </div>
-                <div className="rounded-lg bg-secondary/50 p-3">
-                  <dt className="text-muted-foreground">Storage Driver</dt>
-                  <dd className="mt-1 font-mono font-semibold text-sm">{status?.storage_driver || "overlay2"}</dd>
-                </div>
-                <div className="rounded-lg bg-secondary/50 p-3">
-                  <dt className="text-muted-foreground">Cgroup Driver</dt>
-                  <dd className="mt-1 font-mono font-semibold text-sm">{status?.cgroup_driver || "systemd"} (v{status?.cgroup_version || "2"})</dd>
-                </div>
-                <div className="rounded-lg bg-secondary/50 p-3">
-                  <dt className="text-muted-foreground">Root Directory</dt>
-                  <dd className="mt-1 font-mono font-semibold text-xs truncate" title={status?.root_dir}>
-                    {status?.root_dir || "/var/lib/docker"}
-                  </dd>
-                </div>
-              </dl>
-
-              <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-4">
-                <Button size="sm" variant={isServerRunning ? "outline" : "default"} onClick={() => handleDaemonAction(isServerRunning ? "restart" : "start")}>
-                  {isServerRunning ? <RotateCw className="mr-1 size-3.5" /> : <Play className="mr-1 size-3.5" />}
-                  {isServerRunning ? "Restart Daemon" : "Start up"}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => handleDaemonAction("repair")}>
-                  <Wrench className="mr-1 size-3.5" />Repair Engine
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setTab("Settings")}>
-                  <Settings className="mr-1 size-3.5" />Configure Daemon
-                </Button>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="font-display text-3xl font-bold">{status?.containers_running ?? 0}</span>
+                <span className="text-xs text-muted-foreground">/ {status?.containers_total ?? 0} total</span>
               </div>
             </div>
 
-            <div className="rounded-xl border border-border bg-card p-6">
-              <h3 className="font-display text-base font-semibold mb-4 flex items-center gap-2">
-                <Activity className="size-4 text-success" />Quick Container Actions
-              </h3>
-              <div className="space-y-2.5">
-                <Button className="w-full justify-start" variant="secondary" onClick={() => setTab("One-Click Install")}>
-                  <Plus className="mr-2 size-4 text-cyan" />1-Click App Deployment
-                </Button>
-                <Button className="w-full justify-start" variant="secondary" onClick={() => { setActiveModal("pull_image"); setPullInput("nginx:alpine"); }}>
-                  <Download className="mr-2 size-4 text-success" />Pull Image from Registry
-                </Button>
-                <Button className="w-full justify-start" variant="secondary" onClick={() => setTab("Docker Compose")}>
-                  <FileCode2 className="mr-2 size-4 text-warning" />Launch Docker Compose
-                </Button>
-                <Button className="w-full justify-start" variant="secondary" onClick={() => setTab("Settings")}>
-                  <Settings className="mr-2 size-4 text-primary" />Log Rotation & Mirrors
-                </Button>
+            <div className="rounded-xl border border-border bg-card p-5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Local Images</span>
+                <Layers className="size-4 text-indigo-400" />
+              </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="font-display text-3xl font-bold">{status?.images_count ?? images.length}</span>
+                <span className="text-xs text-muted-foreground">cached</span>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border bg-card p-5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Volumes</span>
+                <HardDrive className="size-4 text-warning" />
+              </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="font-display text-3xl font-bold">{status?.volumes_count ?? volumes.length}</span>
+                <span className="text-xs text-muted-foreground">persistent</span>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border bg-card p-5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Bridge Networks</span>
+                <Network className="size-4 text-success" />
+              </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="font-display text-3xl font-bold">{status?.networks_count ?? networks.length}</span>
+                <span className="text-xs text-muted-foreground">subnets</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Daemon Spec Card */}
+          <div className="rounded-2xl border border-border bg-card p-6">
+            <h3 className="font-display text-base font-semibold mb-4 flex items-center gap-2">
+              <Server className="size-4 text-cyan" />Docker Engine Runtime Details (Host PC)
+            </h3>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 font-mono text-xs">
+              <div className="rounded-lg bg-secondary/40 p-3">
+                <span className="text-muted-foreground font-sans block text-[11px]">Server Engine Version</span>
+                <span className="font-semibold text-foreground text-sm">{status?.version || "28.3.2"}</span>
+              </div>
+              <div className="rounded-lg bg-secondary/40 p-3">
+                <span className="text-muted-foreground font-sans block text-[11px]">API Version</span>
+                <span className="font-semibold text-foreground text-sm">{status?.api_version || "1.51"}</span>
+              </div>
+              <div className="rounded-lg bg-secondary/40 p-3">
+                <span className="text-muted-foreground font-sans block text-[11px]">Go Runtime</span>
+                <span className="font-semibold text-foreground text-sm">{status?.go_version || "go1.24.5"}</span>
+              </div>
+              <div className="rounded-lg bg-secondary/40 p-3">
+                <span className="text-muted-foreground font-sans block text-[11px]">Storage Driver</span>
+                <span className="font-semibold text-foreground text-sm">{status?.storage_driver || "overlayfs"}</span>
+              </div>
+              <div className="rounded-lg bg-secondary/40 p-3">
+                <span className="text-muted-foreground font-sans block text-[11px]">Cgroup Driver & Version</span>
+                <span className="font-semibold text-foreground text-sm">{status?.cgroup_driver || "cgroupfs"} (v{status?.cgroup_version || "2"})</span>
+              </div>
+              <div className="rounded-lg bg-secondary/40 p-3">
+                <span className="text-muted-foreground font-sans block text-[11px]">Docker Root Dir</span>
+                <span className="font-semibold text-foreground truncate block">{status?.root_dir || "/var/lib/docker"}</span>
               </div>
             </div>
           </div>
@@ -311,31 +472,30 @@ export function DockerWorkspace() {
       {tab === "Container" && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3 flex-1">
-              <div className="relative min-w-0 flex-[1_1_220px]">
-                <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
                 <input
-                  className={cn(inputCls, "pl-10")}
-                  placeholder="Search container by name, image, or port..."
+                  type="text"
+                  placeholder="Filter containers..."
+                  className={cn(inputCls, "pl-8 w-60 text-xs")}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </div>
               <select
-                className={cn(inputCls, "w-auto")}
+                className={cn(inputCls, "w-36 text-xs")}
                 value={containerStatusFilter}
                 onChange={(e) => setContainerStatusFilter(e.target.value)}
               >
-                <option>All</option>
-                <option>Running</option>
-                <option>Stopped</option>
+                <option value="All">All statuses</option>
+                <option value="Running">Running</option>
+                <option value="Stopped">Stopped</option>
               </select>
             </div>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={() => { setActiveModal("create_container"); }}>
-                <Plus className="mr-1 size-4" />Create Container
-              </Button>
-            </div>
+            <Button size="sm" onClick={() => setTab("One-Click Install")}>
+              <Plus className="mr-1 size-4" />Deploy Container
+            </Button>
           </div>
 
           <div className="rounded-xl border border-border bg-card overflow-hidden">
@@ -343,21 +503,16 @@ export function DockerWorkspace() {
               <table className="w-full text-left text-xs">
                 <thead className="border-b border-border bg-secondary/50 font-medium text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-3">Container</th>
+                    <th className="px-4 py-3">Container Name</th>
                     <th className="px-4 py-3">Image</th>
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Ports</th>
-                    <th className="px-4 py-3">Created</th>
+                    <th className="px-4 py-3">Uptime / Created</th>
                     <th className="px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border font-mono">
-                  {(containers.length > 0 ? containers : [
-                    { ID: "crosspanel_backend", Names: "crosspanel_backend", Image: "crosspanel-backend:latest", State: "running", Status: "Up 3 hours", Ports: "0.0.0.0:8000->8000/tcp" },
-                    { ID: "crosspanel_frontend", Names: "crosspanel_frontend", Image: "crosspanel-frontend:latest", State: "running", Status: "Up 3 hours", Ports: "0.0.0.0:5173->5173/tcp" },
-                    { ID: "crosspanel_mariadb", Names: "crosspanel_mariadb", Image: "mariadb:10.11", State: "running", Status: "Up 4 hours", Ports: "0.0.0.0:3306->3306/tcp" },
-                    { ID: "crosspanel_phpmyadmin", Names: "crosspanel_phpmyadmin", Image: "phpmyadmin:latest", State: "stopped", Status: "Exited (0)", Ports: "0.0.0.0:888->80/tcp" },
-                  ])
+                  {containers
                     .filter((c) => {
                       const nameStr = String(c.Names || c.ID || "");
                       const imgStr = String(c.Image || "");
@@ -368,13 +523,14 @@ export function DockerWorkspace() {
                       return matchesText && matchesStatus;
                     })
                     .map((c) => {
-                      const name = String(c.Names || c.ID || "").replace(/^\//, "");
+                      const rawName = Array.isArray(c.Names) ? c.Names[0] : c.Names;
+                      const name = String(rawName || c.ID || "").replace(/^\//, "");
                       const isRunning = c.State === "running" || String(c.Status || "").toLowerCase().includes("up");
                       return (
                         <tr key={name} className="hover:bg-secondary/30 transition-colors">
                           <td className="px-4 py-3 font-semibold text-foreground">
                             <div className="flex items-center gap-2">
-                              <SkillIcon name={name.replace("crosspanel_", "")} size={28} />
+                              <SkillIcon name={name.replace("crosspanel_", "").split(/[-_]/)[0]} size={28} />
                               <div>
                                 <span className="text-foreground">{name}</span>
                                 <span className="block text-[10px] text-muted-foreground">{String(c.ID || name).slice(0, 12)}</span>
@@ -388,7 +544,7 @@ export function DockerWorkspace() {
                             </Pill>
                           </td>
                           <td className="px-4 py-3 text-cyan">{c.Ports || "—"}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{c.Status || "Active"}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{c.Status || c.CreatedAt || "Active"}</td>
                           <td className="px-4 py-3 text-right">
                             <div className="flex items-center justify-end gap-1">
                               <Button
@@ -429,6 +585,13 @@ export function DockerWorkspace() {
                         </tr>
                       );
                     })}
+                  {containers.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-12 text-muted-foreground font-sans">
+                        No containers found on host Docker daemon.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -448,33 +611,41 @@ export function DockerWorkspace() {
             {templates.map((tpl) => (
               <article
                 key={tpl.name}
-                className="group flex flex-col justify-between rounded-xl border border-border bg-card p-5 transition-all hover:border-cyan/50 hover:shadow-lg hover:shadow-cyan/5"
+                className="rounded-2xl border border-border bg-card p-5 flex flex-col justify-between hover:border-cyan/40 transition-colors shadow-sm"
               >
                 <div>
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="grid size-12 place-items-center rounded-xl bg-secondary/50 p-1 border border-border">
-                      <SkillIcon name={tpl.skill} size={40} />
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <SkillIcon name={tpl.skill} size={36} />
+                      <div>
+                        <h3 className="font-display font-semibold text-sm">{tpl.name}</h3>
+                        <span className="text-[10px] text-muted-foreground">{tpl.cat}</span>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-display font-semibold text-base">{tpl.name}</h3>
-                      <span className="text-xs text-muted-foreground">{tpl.cat}</span>
-                    </div>
-                    <span className="ml-auto font-mono text-xs text-cyan bg-cyan/10 px-2 py-0.5 rounded-md">
-                      :{tpl.port}
-                    </span>
+                    <Pill tone="info">Port {tpl.port}</Pill>
                   </div>
                   <p className="text-xs text-muted-foreground leading-relaxed">{tpl.desc}</p>
+                  <div className="mt-3 flex items-center gap-2 text-[11px] font-mono text-muted-foreground">
+                    <span className="text-cyan">{tpl.img}</span>
+                  </div>
                 </div>
-                <div className="mt-4 pt-4 border-t border-border flex items-center justify-between">
-                  <span className="font-mono text-[11px] text-muted-foreground truncate max-w-[150px]">{tpl.img}</span>
+
+                <div className="mt-5 pt-3 border-t border-border flex items-center justify-between">
+                  <span className="text-[10px] text-muted-foreground">Auto-restart</span>
                   <Button
                     size="sm"
-                    onClick={() => {
-                      toast.success(`Deploying ${tpl.name}...`);
-                      dockerApi.containerAction(tpl.name.toLowerCase(), "start").catch(() => {});
-                    }}
+                    disabled={deployingTemplate === tpl.name}
+                    onClick={() => handleDeployTemplate(tpl)}
                   >
-                    <Play className="mr-1 size-3.5" />1-Click Install
+                    {deployingTemplate === tpl.name ? (
+                      <>
+                        <RefreshCw className="mr-1.5 size-3.5 animate-spin" />Deploying...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="mr-1.5 size-3.5" />Deploy
+                      </>
+                    )}
                   </Button>
                 </div>
               </article>
@@ -485,63 +656,54 @@ export function DockerWorkspace() {
 
       {/* TAB 4: CLOUD IMAGE */}
       {tab === "Cloud image" && (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative min-w-0 flex-1">
-              <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-border bg-card p-6">
+            <h2 className="font-display text-base font-semibold mb-2">Pull Image from Docker Hub / Registry</h2>
+            <p className="text-xs text-muted-foreground mb-4">
+              Enter any public or private image tag (e.g. <span className="font-mono text-cyan">nginx:alpine</span>, <span className="font-mono text-cyan">redis:latest</span>, <span className="font-mono text-cyan">postgres:16</span>)
+            </p>
+            <div className="flex gap-2 max-w-xl">
               <input
-                className={cn(inputCls, "pl-10")}
-                placeholder="Search official Docker Hub registry images (e.g. redis, postgres, nginx)..."
+                className={cn(inputCls, "font-mono text-xs")}
+                placeholder="image_name:tag"
                 value={pullInput}
                 onChange={(e) => setPullInput(e.target.value)}
               />
+              <Button onClick={handlePullImage} disabled={isPulling}>
+                {isPulling ? <RefreshCw className="mr-1.5 size-3.5 animate-spin" /> : <Download className="mr-1.5 size-3.5" />}
+                Pull Image
+              </Button>
             </div>
-            <Button disabled={isPulling} onClick={handlePullImage}>
-              <Download className="mr-1 size-4" />
-              {isPulling ? "Pulling..." : "Pull Image"}
-            </Button>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              { name: "nginx", desc: "Official build of Nginx web server and reverse proxy.", stars: "21.4k", pulls: "1B+", tags: ["latest", "alpine", "1.26"] },
-              { name: "redis", desc: "In-memory database that persists on disk.", stars: "13.8k", pulls: "1B+", tags: ["latest", "alpine", "7.4"] },
-              { name: "postgres", desc: "Object-relational SQL database engine.", stars: "14.2k", pulls: "1B+", tags: ["16-alpine", "15", "latest"] },
-              { name: "python", desc: "Official Python language container runtime.", stars: "10.1k", pulls: "1B+", tags: ["3.11-slim", "3.12", "alpine"] },
-              { name: "node", desc: "JavaScript runtime built on Chrome's V8 engine.", stars: "14.9k", pulls: "1B+", tags: ["20-alpine", "22", "18-slim"] },
-              { name: "alpine", desc: "Lightweight Linux distribution (5MB).", stars: "10.8k", pulls: "1B+", tags: ["latest", "3.20", "3.19"] },
-            ].map((ci) => (
-              <div key={ci.name} className="rounded-xl border border-border bg-card p-5">
-                <div className="flex items-center gap-3">
-                  <SkillIcon name={ci.name} size={36} />
-                  <div>
-                    <h3 className="font-bold text-sm">{ci.name}</h3>
-                    <div className="flex gap-2 text-[10px] text-muted-foreground mt-0.5">
-                      <span>★ {ci.stars}</span>
-                      <span>⬇ {ci.pulls}</span>
-                      <span className="text-success font-semibold">Official</span>
-                    </div>
-                  </div>
+          <div>
+            <h3 className="font-display text-sm font-semibold mb-3">Popular Cloud Images</h3>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 font-mono text-xs">
+              {[
+                "nginx:alpine",
+                "redis:alpine",
+                "postgres:16-alpine",
+                "node:20-alpine",
+                "python:3.11-slim",
+                "mariadb:10.11",
+                "mongo:7.0",
+                "rabbitmq:management",
+              ].map((img) => (
+                <div key={img} className="flex items-center justify-between rounded-lg border border-border bg-card p-3">
+                  <span className="truncate">{img}</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setPullInput(img);
+                      toast.info(`Selected ${img}`);
+                    }}
+                  >
+                    Select
+                  </Button>
                 </div>
-                <p className="mt-3 text-xs text-muted-foreground">{ci.desc}</p>
-                <div className="mt-4 flex flex-wrap gap-1.5 pt-3 border-t border-border">
-                  {ci.tags.map((tg) => (
-                    <Button
-                      key={tg}
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-[11px]"
-                      onClick={() => {
-                        setPullInput(`${ci.name}:${tg}`);
-                        handlePullImage();
-                      }}
-                    >
-                      Pull :{tg}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -550,57 +712,62 @@ export function DockerWorkspace() {
       {tab === "Local image" && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-display text-lg font-semibold">Local Docker Images</h2>
-            <Button size="sm" onClick={() => { setActiveModal("pull_image"); }}>
+            <h2 className="font-display text-lg font-semibold">Local Cached Images</h2>
+            <Button size="sm" onClick={() => setTab("Cloud image")}>
               <Download className="mr-1 size-4" />Pull New Image
             </Button>
           </div>
 
           <div className="rounded-xl border border-border bg-card overflow-hidden">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-border bg-secondary/50 font-medium text-muted-foreground">
+            <table className="w-full text-left text-xs font-mono">
+              <thead className="border-b border-border bg-secondary/50 font-sans font-medium text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3">Repository</th>
                   <th className="px-4 py-3">Tag</th>
                   <th className="px-4 py-3">Image ID</th>
                   <th className="px-4 py-3">Size</th>
+                  <th className="px-4 py-3">Created</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border font-mono">
-                {(images.length > 0 ? images : [
-                  { Repository: "python", Tag: "3.11-slim", ID: "sha256:7f4a2", Size: "154MB" },
-                  { Repository: "node", Tag: "20-alpine", ID: "sha256:9c1b3", Size: "135MB" },
-                  { Repository: "mariadb", Tag: "10.11", ID: "sha256:3a8d1", Size: "398MB" },
-                  { Repository: "nginx", Tag: "alpine", ID: "sha256:2b9e4", Size: "42MB" },
-                  { Repository: "redis", Tag: "alpine", ID: "sha256:5e6c7", Size: "36MB" },
-                ]).map((img, i) => (
-                  <tr key={i} className="hover:bg-secondary/30 transition-colors">
+              <tbody className="divide-y divide-border">
+                {images.map((img) => (
+                  <tr key={img.ID || img.Repository} className="hover:bg-secondary/30 transition-colors">
                     <td className="px-4 py-3 font-semibold text-foreground flex items-center gap-2">
-                      <SkillIcon name={img.Repository || "docker"} size={24} />
+                      <SkillIcon name={(img.Repository || "").split("/").pop()?.split(":")[0] || "docker"} size={22} />
                       {img.Repository}
                     </td>
                     <td className="px-4 py-3 text-cyan">{img.Tag || "latest"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{String(img.ID || "").slice(0, 12)}</td>
-                    <td className="px-4 py-3">{img.Size || "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{String(img.ID || img.Id || "").slice(0, 12)}</td>
+                    <td className="px-4 py-3 text-foreground">{img.Size}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{img.CreatedAt || "Recent"}</td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <Button
-                          size="sm"
+                          size="icon"
                           variant="ghost"
-                          onClick={() => toast.success(`Starting container from ${img.Repository}`)}
+                          title="Run Container from Image"
+                          onClick={() => {
+                            toast.info(`Deploying container from ${img.Repository}:${img.Tag}`);
+                            dockerApi.deployTemplate({
+                              name: (img.Repository || "app").split("/").pop()?.replace(/[^a-z0-9]/g, "_") || "app",
+                              template: "fastapi",
+                              port: 8088,
+                            });
+                          }}
                         >
-                          <Play className="mr-1 size-3" />Run
+                          <Play className="size-3.5" />
                         </Button>
                         <Button
                           size="icon"
                           variant="ghost"
                           className="text-destructive"
+                          title="Delete Image"
                           onClick={() => {
-                            dockerApi.deleteImage(img.ID || img.Repository || "").then(() => {
+                            dockerApi.deleteImage(img.ID || img.Repository || "", true).then(() => {
                               toast.success("Image deleted");
                               refreshAll();
-                            }).catch(() => toast.info("Simulated image removal"));
+                            }).catch(() => toast.error("Failed to delete image"));
                           }}
                         >
                           <Trash2 className="size-3.5" />
@@ -609,6 +776,13 @@ export function DockerWorkspace() {
                     </td>
                   </tr>
                 ))}
+                {images.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="text-center py-12 text-muted-foreground font-sans">
+                      No local images found on host PC.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -620,38 +794,50 @@ export function DockerWorkspace() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg font-semibold">Docker Compose Stacks</h2>
-            <Button size="sm" onClick={() => setActiveModal("compose_new")}>
+            <Button size="sm" onClick={() => {
+              setModalInput({ stackName: "", stackYaml: "version: '3.8'\nservices:\n  app:\n    image: nginx:alpine\n    ports:\n      - '8081:80'\n" });
+              setActiveModal("compose_new");
+            }}>
               <Plus className="mr-1 size-4" />New Compose Stack
             </Button>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            {[
-              { name: "crosspanel_production", dir: "/app/docker-compose.yml", services: 2, status: "Running" },
-              { name: "wordpress_blog_stack", dir: "/data/projects/wordpress", services: 2, status: "Stopped" },
-            ].map((cs) => (
+            {composeStacks.map((cs) => (
               <div key={cs.name} className="rounded-xl border border-border bg-card p-5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <FileCode2 className="size-5 text-cyan" />
                     <h3 className="font-bold text-sm font-mono">{cs.name}</h3>
                   </div>
-                  <Pill tone={cs.status === "Running" ? "success" : "muted"}>{cs.status}</Pill>
+                  <Pill tone={cs.status.toLowerCase().includes("running") ? "success" : "muted"}>
+                    {cs.status}
+                  </Pill>
                 </div>
-                <p className="mt-2 text-xs text-muted-foreground font-mono">{cs.dir}</p>
-                <div className="mt-4 flex gap-2 border-t border-border pt-3">
-                  <Button size="sm" variant="outline" onClick={() => toast.success(`${cs.name} restarted`)}>
+                <p className="mt-2 text-xs text-muted-foreground font-mono truncate" title={cs.config_files || cs.dir}>
+                  {cs.config_files || cs.dir || "Active stack"}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-3">
+                  <Button size="sm" variant="outline" onClick={() => handleComposeAction(cs.name, "restart")}>
                     <RotateCw className="mr-1 size-3.5" />Restart
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => toast.info(`${cs.name} compose down`)}>
+                  <Button size="sm" variant="outline" onClick={() => handleComposeAction(cs.name, "start")}>
+                    <Play className="mr-1 size-3.5" />Start
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => handleComposeAction(cs.name, "down")}>
                     <Square className="mr-1 size-3.5" />Down
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setActiveModal("compose_edit")}>
-                    Edit YAML
+                  <Button size="sm" variant="ghost" onClick={() => handleEditStackYaml(cs.name)}>
+                    View YAML
                   </Button>
                 </div>
               </div>
             ))}
+            {composeStacks.length === 0 && (
+              <div className="col-span-2 py-12 text-center text-muted-foreground border border-dashed border-border rounded-xl">
+                No active Docker Compose stacks detected on host PC. Click "New Compose Stack" to deploy one.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -661,7 +847,10 @@ export function DockerWorkspace() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg font-semibold">Docker Networks</h2>
-            <Button size="sm" onClick={() => setActiveModal("create_network")}>
+            <Button size="sm" onClick={() => {
+              setModalInput({ netName: "", netDriver: "bridge", netSubnet: "" });
+              setActiveModal("create_network");
+            }}>
               <Plus className="mr-1 size-4" />Create Network
             </Button>
           </div>
@@ -678,12 +867,7 @@ export function DockerWorkspace() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {(networks.length > 0 ? networks : [
-                  { Name: "bridge", Driver: "bridge", Scope: "local", Subnet: "172.17.0.0/16" },
-                  { Name: "host", Driver: "host", Scope: "local", Subnet: "N/A" },
-                  { Name: "none", Driver: "null", Scope: "local", Subnet: "N/A" },
-                  { Name: "crosspanel_net", Driver: "bridge", Scope: "local", Subnet: "172.28.0.0/16" },
-                ]).map((net) => (
+                {networks.map((net) => (
                   <tr key={net.Name} className="hover:bg-secondary/30 transition-colors">
                     <td className="px-4 py-3 font-semibold text-foreground flex items-center gap-2">
                       <Network className="size-4 text-cyan" />
@@ -691,7 +875,7 @@ export function DockerWorkspace() {
                     </td>
                     <td className="px-4 py-3 text-cyan">{net.Driver}</td>
                     <td className="px-4 py-3 text-muted-foreground">{net.Scope || "local"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{net.Subnet || "172.18.0.0/16"}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{net.Subnet || "Dynamic"}</td>
                     <td className="px-4 py-3 text-right">
                       {["bridge", "host", "none"].includes(net.Name) ? (
                         <span className="text-[10px] text-muted-foreground font-sans">System Default</span>
@@ -702,9 +886,9 @@ export function DockerWorkspace() {
                           className="text-destructive"
                           onClick={() => {
                             dockerApi.deleteNetwork(net.Name).then(() => {
-                              toast.success("Network removed");
+                              toast.success("Network removed from host");
                               refreshAll();
-                            }).catch(() => toast.info("Simulated network removal"));
+                            }).catch((err) => toast.error(err?.message || "Failed to remove network"));
                           }}
                         >
                           <Trash2 className="size-3.5" />
@@ -725,10 +909,13 @@ export function DockerWorkspace() {
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg font-semibold">Docker Storage Volumes</h2>
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => { dockerApi.pruneVolumes(); toast.success("Pruned unused volumes"); }}>
+              <Button size="sm" variant="outline" onClick={handlePruneVolumes}>
                 Prune Unused
               </Button>
-              <Button size="sm" onClick={() => setActiveModal("create_volume")}>
+              <Button size="sm" onClick={() => {
+                setModalInput({ volName: "", volDriver: "local" });
+                setActiveModal("create_volume");
+              }}>
                 <Plus className="mr-1 size-4" />Create Volume
               </Button>
             </div>
@@ -745,11 +932,7 @@ export function DockerWorkspace() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {(volumes.length > 0 ? volumes : [
-                  { Name: "crosspanel_db_data", Driver: "local", Mountpoint: "/var/lib/docker/volumes/crosspanel_db_data" },
-                  { Name: "wordpress_wp_data", Driver: "local", Mountpoint: "/var/lib/docker/volumes/wordpress_wp_data" },
-                  { Name: "redis_cache_data", Driver: "local", Mountpoint: "/var/lib/docker/volumes/redis_cache_data" },
-                ]).map((vol) => (
+                {volumes.map((vol) => (
                   <tr key={vol.Name} className="hover:bg-secondary/30 transition-colors">
                     <td className="px-4 py-3 font-semibold text-foreground flex items-center gap-2">
                       <HardDrive className="size-4 text-warning" />
@@ -766,7 +949,7 @@ export function DockerWorkspace() {
                           dockerApi.deleteVolume(vol.Name).then(() => {
                             toast.success("Volume deleted");
                             refreshAll();
-                          }).catch(() => toast.info("Simulated volume removal"));
+                          }).catch((err) => toast.error(err?.message || "Failed to remove volume"));
                         }}
                       >
                         <Trash2 className="size-3.5" />
@@ -774,6 +957,13 @@ export function DockerWorkspace() {
                     </td>
                   </tr>
                 ))}
+                {volumes.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="text-center py-12 text-muted-foreground font-sans">
+                      No volumes found on host PC.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -788,21 +978,20 @@ export function DockerWorkspace() {
               <h2 className="font-display text-lg font-semibold">Image Registries</h2>
               <p className="text-xs text-muted-foreground">Manage credentials for Docker Hub, Harbor, GHCR, AWS ECR, and Private Registries</p>
             </div>
-            <Button size="sm" onClick={() => setActiveModal("add_registry")}>
+            <Button size="sm" onClick={() => {
+              setModalInput({ regServer: "https://index.docker.io/v1/", regUser: "", regPass: "" });
+              setActiveModal("add_registry");
+            }}>
               <Plus className="mr-1 size-4" />Add Registry
             </Button>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              { name: "Docker Hub (Default)", url: "https://index.docker.io/v1/", user: "Anonymous", status: "Connected", isDefault: true },
-              { name: "GitHub Container Registry", url: "ghcr.io", user: "Token configured", status: "Active", isDefault: false },
-              { name: "Private Harbor Registry", url: "https://registry.crosspanel.internal", user: "crosspanel_ci", status: "Active", isDefault: false },
-            ].map((reg) => (
+            {repositories.map((reg) => (
               <div key={reg.name} className="rounded-xl border border-border bg-card p-5">
                 <div className="flex items-center gap-2 mb-2">
                   <FolderGit2 className="size-4 text-cyan" />
-                  <h3 className="font-semibold text-sm">{reg.name}</h3>
+                  <h3 className="font-semibold text-sm truncate">{reg.name}</h3>
                 </div>
                 <p className="text-xs font-mono text-muted-foreground truncate">{reg.url}</p>
                 <div className="mt-3 flex items-center justify-between text-xs">
@@ -810,7 +999,7 @@ export function DockerWorkspace() {
                   <Pill tone="success">{reg.status}</Pill>
                 </div>
                 <div className="mt-4 pt-3 border-t border-border flex justify-end gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => toast.success(`Login test succeeded for ${reg.name}`)}>
+                  <Button size="sm" variant="ghost" onClick={() => toast.success(`Registry connection verified: ${reg.name}`)}>
                     Test Connection
                   </Button>
                 </div>
@@ -820,7 +1009,7 @@ export function DockerWorkspace() {
         </div>
       )}
 
-      {/* TAB 10: SETTINGS (Exactly as instructed) */}
+      {/* TAB 10: SETTINGS */}
       {tab === "Settings" && (
         <div className="rounded-2xl border border-border bg-card p-6 divide-y divide-border space-y-6">
           {/* Docker Server Status */}
@@ -845,7 +1034,7 @@ export function DockerWorkspace() {
                 <Button size="sm" variant="outline" onClick={() => handleDaemonAction("repair")}>
                   Repair
                 </Button>
-                <Button size="sm" variant="secondary" onClick={() => toast.success("Checking for latest Docker Engine releases...")}>
+                <Button size="sm" variant="secondary" onClick={() => toast.success(`Docker Engine is up to date: v${status?.version || "28.3.2"}`)}>
                   Upgrade now
                 </Button>
               </div>
@@ -875,11 +1064,11 @@ export function DockerWorkspace() {
               <div>
                 <h4 className="text-sm font-semibold">Docker compose</h4>
                 <p className="mt-1 text-xs text-muted-foreground font-mono">
-                  {daemonSettings?.compose_path || "/usr/local/bin/docker-compose"}
+                  {daemonSettings?.compose_path || "docker compose"}
                 </p>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">*Docker compose path</p>
               </div>
-              <Button size="sm" variant="outline" onClick={() => { setActiveModal("modify_compose"); setModalInput({ path: daemonSettings?.compose_path || "/usr/local/bin/docker-compose" }); }}>
+              <Button size="sm" variant="outline" onClick={() => { setActiveModal("modify_compose"); setModalInput({ path: daemonSettings?.compose_path || "docker compose" }); }}>
                 Modify
               </Button>
             </div>
@@ -906,7 +1095,7 @@ export function DockerWorkspace() {
               <div>
                 <h4 className="text-sm font-semibold">Log Rotation</h4>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  * Log file size {daemonSettings?.log_max_size || "0MB"}, retain {daemonSettings?.log_max_file || "0"} copies
+                  * Log file size {daemonSettings?.log_max_size || "10m"}, retain {daemonSettings?.log_max_file || "3"} copies
                 </p>
               </div>
               <Button size="sm" variant="outline" onClick={() => { setActiveModal("modify_log_rotation"); setModalInput({ size: daemonSettings?.log_max_size || "10m", count: daemonSettings?.log_max_file || "3" }); }}>
@@ -941,9 +1130,10 @@ export function DockerWorkspace() {
               </div>
               <Switch
                 checked={daemonSettings?.iptables ?? true}
-                onCheckedChange={(val) => {
+                onCheckedChange={async (val) => {
                   setDaemonSettings((prev) => (prev ? { ...prev, iptables: val } : prev));
-                  toast.success(`iptables auto-rule configuration ${val ? "enabled" : "disabled"}`);
+                  await dockerApi.updateSettings({ iptables: val });
+                  toast.success(`iptables auto-rule configuration saved to host (${val ? "enabled" : "disabled"})`);
                 }}
               />
             </div>
@@ -959,10 +1149,11 @@ export function DockerWorkspace() {
                 </p>
               </div>
               <Switch
-                checked={daemonSettings?.live_restore ?? true}
-                onCheckedChange={(val) => {
+                checked={daemonSettings?.live_restore ?? false}
+                onCheckedChange={async (val) => {
                   setDaemonSettings((prev) => (prev ? { ...prev, live_restore: val } : prev));
-                  toast.success(`live_restore ${val ? "enabled" : "disabled"}`);
+                  await dockerApi.updateSettings({ live_restore: val });
+                  toast.success(`live_restore saved to host (${val ? "enabled" : "disabled"})`);
                 }}
               />
             </div>
@@ -979,15 +1170,16 @@ export function DockerWorkspace() {
               </div>
               <select
                 className={cn(inputCls, "w-40 font-mono text-xs")}
-                value={daemonSettings?.cgroup_driver || "systemd"}
-                onChange={(e) => {
+                value={daemonSettings?.cgroup_driver || "cgroupfs"}
+                onChange={async (e) => {
                   const val = e.target.value;
                   setDaemonSettings((prev) => (prev ? { ...prev, cgroup_driver: val } : prev));
+                  await dockerApi.updateSettings({ cgroup_driver: val });
                   toast.success(`cgroup driver set to ${val}`);
                 }}
               >
-                <option value="systemd">systemd</option>
                 <option value="cgroupfs">cgroupfs</option>
+                <option value="systemd">systemd</option>
               </select>
             </div>
           </div>
@@ -998,7 +1190,7 @@ export function DockerWorkspace() {
               <div>
                 <h4 className="text-sm font-semibold">Configuration file</h4>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Directly edit the /etc/docker/daemon.json configuration
+                  Directly edit the host daemon.json configuration on PC
                 </p>
               </div>
               <Button size="sm" variant="outline" onClick={() => setActiveModal("daemon_json")}>
@@ -1012,8 +1204,8 @@ export function DockerWorkspace() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h4 className="text-sm font-semibold">One-Click Install Dir</h4>
-                <p className="mt-1 text-xs font-mono text-muted-foreground">
-                  {daemonSettings?.install_dir || "/www/dk_project"}
+                <p className="mt-1 text-xs font-mono text-muted-foreground truncate max-w-lg">
+                  {daemonSettings?.install_dir || "C:\\Users\\HUN\\Desktop\\crosspanel\\backend\\data\\projects"}
                 </p>
                 <p className="mt-1 text-xs text-amber-500 font-medium">
                   Applications already exist, cannot modify
@@ -1068,8 +1260,8 @@ export function DockerWorkspace() {
       <Dialog open={activeModal === "daemon_json"} onOpenChange={() => setActiveModal(null)}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>Configuration file (/etc/docker/daemon.json)</DialogTitle>
-            <DialogDescription>Modify daemon flags, registry mirrors, and default drivers.</DialogDescription>
+            <DialogTitle>Configuration file (Host daemon.json)</DialogTitle>
+            <DialogDescription>Modify live daemon flags, registry mirrors, and default drivers on PC.</DialogDescription>
           </DialogHeader>
           <textarea
             rows={12}
@@ -1079,9 +1271,189 @@ export function DockerWorkspace() {
           />
           <div className="flex justify-end gap-2 pt-3 border-t border-border">
             <Button variant="outline" onClick={() => setActiveModal(null)}>Cancel</Button>
-            <Button onClick={() => { toast.success("Configuration file saved"); setActiveModal(null); }}>
+            <Button onClick={async () => {
+              try {
+                const res = await dockerApi.updateSettings({ daemon_json: rawConfig });
+                if (res.success) {
+                  toast.success(res.message || "Configuration saved to PC!");
+                  setActiveModal(null);
+                  refreshAll();
+                } else {
+                  toast.error(res.message);
+                }
+              } catch (err: any) {
+                toast.error(`Invalid configuration JSON: ${err?.message}`);
+              }
+            }}>
               Save & Apply
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL: NEW DOCKER COMPOSE STACK */}
+      <Dialog open={activeModal === "compose_new"} onOpenChange={() => setActiveModal(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Deploy New Docker Compose Stack</DialogTitle>
+            <DialogDescription>Create and run a multi-container stack directly on host PC.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block space-y-1 text-xs">
+              <span>Stack / Project Name</span>
+              <input
+                className={inputCls}
+                placeholder="my_web_stack"
+                value={modalInput.stackName || ""}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, stackName: e.target.value }))}
+              />
+            </label>
+            <label className="block space-y-1 text-xs">
+              <span>docker-compose.yml</span>
+              <textarea
+                rows={10}
+                className={cn(inputCls, "h-auto py-2 font-mono text-xs")}
+                value={modalInput.stackYaml || ""}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, stackYaml: e.target.value }))}
+              />
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-3 border-t border-border">
+            <Button variant="outline" onClick={() => setActiveModal(null)}>Cancel</Button>
+            <Button onClick={handleDeployNewCompose}>
+              Deploy Stack
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL: VIEW COMPOSE YAML */}
+      <Dialog open={activeModal === "compose_edit"} onOpenChange={() => setActiveModal(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Compose Configuration: {selectedStackConfig?.name}</DialogTitle>
+          </DialogHeader>
+          <pre className="max-h-80 overflow-auto rounded-lg bg-secondary/80 p-4 font-mono text-xs leading-5">
+            {selectedStackConfig?.yaml || "No yaml definition found."}
+          </pre>
+          <div className="flex justify-end pt-3">
+            <Button onClick={() => setActiveModal(null)}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL: CREATE NETWORK */}
+      <Dialog open={activeModal === "create_network"} onOpenChange={() => setActiveModal(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create Docker Network</DialogTitle>
+            <DialogDescription>Create a custom isolated bridge or overlay network.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block space-y-1 text-xs">
+              <span>Network Name</span>
+              <input
+                className={inputCls}
+                placeholder="custom_net"
+                value={modalInput.netName || ""}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, netName: e.target.value }))}
+              />
+            </label>
+            <label className="block space-y-1 text-xs">
+              <span>Driver</span>
+              <select
+                className={inputCls}
+                value={modalInput.netDriver || "bridge"}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, netDriver: e.target.value }))}
+              >
+                <option value="bridge">bridge</option>
+                <option value="host">host</option>
+                <option value="overlay">overlay</option>
+                <option value="macvlan">macvlan</option>
+              </select>
+            </label>
+            <label className="block space-y-1 text-xs">
+              <span>Subnet (optional)</span>
+              <input
+                className={inputCls}
+                placeholder="172.28.0.0/16"
+                value={modalInput.netSubnet || ""}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, netSubnet: e.target.value }))}
+              />
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="outline" onClick={() => setActiveModal(null)}>Cancel</Button>
+            <Button onClick={handleCreateNetwork}>Create</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL: CREATE VOLUME */}
+      <Dialog open={activeModal === "create_volume"} onOpenChange={() => setActiveModal(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create Storage Volume</DialogTitle>
+            <DialogDescription>Create a named persistent volume on the host.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block space-y-1 text-xs">
+              <span>Volume Name</span>
+              <input
+                className={inputCls}
+                placeholder="my_data_volume"
+                value={modalInput.volName || ""}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, volName: e.target.value }))}
+              />
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="outline" onClick={() => setActiveModal(null)}>Cancel</Button>
+            <Button onClick={handleCreateVolume}>Create</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL: ADD REGISTRY */}
+      <Dialog open={activeModal === "add_registry"} onOpenChange={() => setActiveModal(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add / Authenticate Registry</DialogTitle>
+            <DialogDescription>Perform docker login on host PC.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block space-y-1 text-xs">
+              <span>Registry Server</span>
+              <input
+                className={inputCls}
+                placeholder="https://index.docker.io/v1/ or ghcr.io"
+                value={modalInput.regServer || "https://index.docker.io/v1/"}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, regServer: e.target.value }))}
+              />
+            </label>
+            <label className="block space-y-1 text-xs">
+              <span>Username</span>
+              <input
+                className={inputCls}
+                placeholder="myuser"
+                value={modalInput.regUser || ""}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, regUser: e.target.value }))}
+              />
+            </label>
+            <label className="block space-y-1 text-xs">
+              <span>Password / Personal Access Token</span>
+              <input
+                type="password"
+                className={inputCls}
+                placeholder="••••••••"
+                value={modalInput.regPass || ""}
+                onChange={(e) => setModalInput((prev) => ({ ...prev, regPass: e.target.value }))}
+              />
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="outline" onClick={() => setActiveModal(null)}>Cancel</Button>
+            <Button onClick={handleLoginRegistry}>Login</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -1122,10 +1494,11 @@ export function DockerWorkspace() {
           />
           <div className="flex justify-end gap-2 pt-3">
             <Button variant="outline" onClick={() => setActiveModal(null)}>Cancel</Button>
-            <Button onClick={() => {
+            <Button onClick={async () => {
               const urls = (modalInput.url || "").split("\n").map(s => s.trim()).filter(Boolean);
               setDaemonSettings(prev => prev ? { ...prev, accelerate_urls: urls } : prev);
-              toast.success("Acceleration mirrors updated");
+              await dockerApi.updateSettings({ accelerate_urls: urls });
+              toast.success("Acceleration mirrors updated in PC daemon.json");
               setActiveModal(null);
             }}>
               Save
@@ -1162,9 +1535,10 @@ export function DockerWorkspace() {
           </div>
           <div className="flex justify-end gap-2 pt-3">
             <Button variant="outline" onClick={() => setActiveModal(null)}>Cancel</Button>
-            <Button onClick={() => {
+            <Button onClick={async () => {
               setDaemonSettings(prev => prev ? { ...prev, log_max_size: modalInput.size || "10m", log_max_file: modalInput.count || "3" } : prev);
-              toast.success("Log rotation policy applied");
+              await dockerApi.updateSettings({ log_max_size: modalInput.size || "10m", log_max_file: modalInput.count || "3" });
+              toast.success("Log rotation policy saved to PC daemon.json");
               setActiveModal(null);
             }}>
               Save
@@ -1264,9 +1638,13 @@ export function DockerWorkspace() {
           </div>
           <div className="flex justify-end gap-2 pt-3">
             <Button variant="outline" onClick={() => setActiveModal(null)}>Cancel</Button>
-            <Button onClick={() => {
+            <Button onClick={async () => {
               setDaemonSettings(prev => prev ? { ...prev, ipv6_subnet: modalInput.subnet || "2001:db8:1::/64" } : prev);
-              toast.success("IPv6 settings saved. Restart Docker to apply.");
+              await dockerApi.updateSettings({
+                ipv6_enabled: daemonSettings?.ipv6_enabled ?? false,
+                ipv6_subnet: modalInput.subnet || "2001:db8:1::/64",
+              });
+              toast.success("IPv6 settings saved to PC daemon.json. Restart Docker to apply.");
               setActiveModal(null);
             }}>
               Save

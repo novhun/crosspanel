@@ -13,6 +13,7 @@ async def get_db():
 
 async def init_db():
     import app.models.settings  # noqa: F401 - Register models with Base.metadata
+    import app.models.user      # noqa: F401 - Register auth models
     from sqlalchemy import inspect, text
 
     def _sync_schema(connection):
