@@ -1,10 +1,11 @@
 @echo off
+cd /d "%~dp0"
 echo ====================================================
 echo Starting CrossPanel All-in-One DevOps Control Panel
 echo ====================================================
 
-start "CrossPanel Backend" cmd /k "cd backend && .\venv\Scripts\activate && set PYTHONPATH=. && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-start "CrossPanel Frontend" cmd /k "cd frontend && npm run dev"
+start "CrossPanel Backend" cmd /k "backend\run.cmd"
+start "CrossPanel Frontend" cmd /k "frontend\run.cmd"
 
 echo CrossPanel is starting up!
 echo Backend API Docs: http://localhost:8000/docs
