@@ -405,7 +405,7 @@ def build_native_menu(base_url: str, backend_port: int, frontend_port: int) -> l
     # 1. macOS Application Menu (__app__)
     app_menu = Menu("__app__", [
         MenuAction("About CrossPanel", _show_about),
-        MenuAction("Check for Updates...", lambda: _open_url("https://github.com/mrhun/crosspanel/releases")),
+        MenuAction("Check for Updates...", lambda: _open_url("https://github.com/novhun/crosspanel/releases")),
         MenuSeparator(),
         MenuAction("Preferences / Settings", nav("/settings")),
         MenuSeparator(),
