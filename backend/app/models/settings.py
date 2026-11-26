@@ -147,3 +147,30 @@ class ManagedDatabase(Base):
     run_mode = Column(String(20), default="native") # native or docker
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class FtpConnection(Base):
+    __tablename__ = "ftp_connections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    protocol = Column(String(20), default="ftp") # ftp, ftps, sftp
+    host = Column(String(255), nullable=False)
+    port = Column(Integer, default=21)
+    username = Column(String(100), nullable=False)
+    password = Column(String(255), default="")
+    remote_path = Column(String(255), default="/")
+    passive = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FtpAccount(Base):
+    __tablename__ = "ftp_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(100), unique=True, index=True, nullable=False)
+    password = Column(String(255), nullable=False)
+    home_dir = Column(String(255), nullable=False)
+    permissions = Column(String(20), default="elradfmwMT")
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+

@@ -576,6 +576,7 @@ def build_native_menu(base_url: str, backend_port: int, frontend_port: int) -> l
             MenuAction("Database Management", nav("/databases")),
             MenuAction("Launch phpMyAdmin (Port 888)", lambda: _open_url("http://localhost:888")),
             MenuAction("Web File Manager", nav("/files")),
+            MenuAction("FTP / SFTP Manager", nav("/ftp")),
             MenuAction("Automated Backups & Snapshots", nav("/backups")),
         ]),
 

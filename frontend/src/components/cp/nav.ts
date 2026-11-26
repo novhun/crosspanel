@@ -1,4 +1,4 @@
-import { Home, Boxes, Container, Database, Rocket, SquareTerminal, Globe, Workflow, ShieldCheck, FolderOpen, Settings, Info, PanelsTopLeft, ServerCog, Archive, Users, Clock, FileText, Bot } from "lucide-react";
+import { Home, Boxes, Container, Database, Rocket, SquareTerminal, Globe, Workflow, ShieldCheck, FolderOpen, Settings, Info, PanelsTopLeft, ServerCog, Archive, Users, Clock, FileText, Bot, ArrowLeftRight } from "lucide-react";
 export const mainNav = [
   { title: "Dashboard", url: "/", icon: Home },
   { title: "Applications", url: "/applications", icon: Boxes },
@@ -21,6 +21,7 @@ export const mgmtNav = [
   { title: "Cron Jobs", url: "/cron", icon: Clock },
   { title: "Security", url: "/security", icon: ShieldCheck },
   { title: "File Manager", url: "/files", icon: FolderOpen },
+  { title: "FTP Manager", url: "/ftp", icon: ArrowLeftRight },
   { title: "Settings", url: "/settings", icon: Settings },
   { title: "About", url: "/about", icon: Info },
 ] as const;

@@ -16,6 +16,7 @@ interface XTermTerminalProps {
   enabled?: boolean;
   fontSize?: number;
   cwd?: string | undefined;
+  initialCommand?: string | undefined;
   reconnectNonce?: number;
   className?: string | undefined;
   onStatusChange?: ((connected: boolean) => void) | undefined;
@@ -27,6 +28,7 @@ export function XTermTerminal({
   enabled = true,
   fontSize = 13,
   cwd,
+  initialCommand,
   reconnectNonce = 0,
   className,
   onStatusChange,
@@ -144,6 +146,9 @@ export function XTermTerminal({
           sendResize(term.cols, term.rows);
         } catch {
           // ignore
+        }
+        if (initialCommand && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "input", data: `${initialCommand}\n` }));
         }
         term.focus();
       };

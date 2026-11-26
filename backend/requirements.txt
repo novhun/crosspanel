@@ -13,3 +13,5 @@ pyyaml>=6.0.2
 aiofiles>=24.1.0
 pyjwt>=2.8.0
 pywebview>=5.0.0
+pyftpdlib>=2.0.0
+paramiko>=3.4.0

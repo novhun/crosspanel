@@ -7,3 +7,4 @@ export * from "./database.api";
 export * from "./docker.api";
 export * from "./auth.api";
 export * from "./files.api";
+export * from "./ftp.api";

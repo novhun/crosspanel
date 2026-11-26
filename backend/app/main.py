@@ -15,7 +15,8 @@ from app.controllers import (
     terminal_controller,
     docker_controller,
     auth_controller,
-    user_controller
+    user_controller,
+    ftp_controller
 )
 
 @asynccontextmanager
@@ -55,6 +56,7 @@ app.include_router(terminal_controller.router, prefix=settings.API_PREFIX)
 app.include_router(docker_controller.router, prefix=settings.API_PREFIX)
 app.include_router(auth_controller.router, prefix=settings.API_PREFIX)
 app.include_router(user_controller.router, prefix=settings.API_PREFIX)
+app.include_router(ftp_controller.router, prefix=settings.API_PREFIX)
 
 @app.get("/")
 async def root():

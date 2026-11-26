@@ -5,3 +5,4 @@ export * from "./deploy.types";
 export * from "./tunnel.types";
 export * from "./database.types";
 export * from "./files.types";
+export * from "./ftp.types";
