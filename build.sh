@@ -67,25 +67,40 @@ build_frontend() {
     cd "$ROOT_DIR"
 }
 
+find_python() {
+    local fallback=""
+    for cmd in python3.13 python3.12 python3.11 python3.10 python3 python; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            [ -z "$fallback" ] && fallback="$cmd"
+            if "$cmd" -c "import venv, ensurepip" >/dev/null 2>&1; then
+                echo "$cmd"
+                return 0
+            fi
+        fi
+    done
+    [ -n "$fallback" ] && echo "$fallback"
+}
+
 build_backend() {
     log_info "Configuring Backend environment..."
     cd "$ROOT_DIR/backend"
 
-    # Find Python 3
-    if command -v python3 >/dev/null 2>&1; then
-        PY_CMD="python3"
-    elif command -v python >/dev/null 2>&1; then
-        PY_CMD="python"
-    else
+    PY_CMD="$(find_python)"
+    if [ -z "$PY_CMD" ]; then
         log_error "Python 3 is not installed or not found in PATH. Please install Python 3.10+."
         exit 1
     fi
 
-    if [ ! -d "venv" ]; then
+    if [ ! -f "venv/bin/python" ] || [ ! -f "venv/bin/pip" ]; then
+        rm -rf venv
         log_info "Creating Python virtual environment using $PY_CMD..."
         VENV_ARGS=""
-        if [ "$(uname -s)" = "Linux" ]; then
-            VENV_ARGS="--system-site-packages"
+        if [ "$(uname -s)" = "Linux" ] && [ -x /usr/bin/python3 ]; then
+            SYS_VER="$(/usr/bin/python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
+            PY_VER="$("$PY_CMD" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
+            if [ -n "$SYS_VER" ] && [ "$SYS_VER" = "$PY_VER" ]; then
+                VENV_ARGS="--system-site-packages"
+            fi
         fi
         "$PY_CMD" -m venv $VENV_ARGS venv
     fi
@@ -112,15 +127,19 @@ build_docker() {
 build_desktop() {
     log_info "Configuring desktop dependencies (pywebview)..."
     cd "$ROOT_DIR/backend"
-    if [ -f "venv/bin/python" ]; then
-        ./venv/bin/python -m pip install pywebview
-        log_success "Desktop pywebview package installed."
-    else
+    if [ ! -f "venv/bin/python" ] || [ ! -f "venv/bin/pip" ]; then
         log_warn "Backend venv not found. Running backend setup first..."
         build_backend
-        ./venv/bin/python -m pip install pywebview
-        log_success "Desktop pywebview package installed."
     fi
+    ./venv/bin/python -m pip install pywebview
+    if [ "$(uname -s)" = "Linux" ]; then
+        if ! ./venv/bin/python -c "import gi; gi.require_version('WebKit2', '4.0')" >/dev/null 2>&1 \
+           && ! ./venv/bin/python -c "import qtpy; from qtpy import QtWebEngineWidgets" >/dev/null 2>&1; then
+            log_info "Installing Qt WebEngine backend for Linux desktop..."
+            ./venv/bin/python -m pip install PyQt6 PyQt6-WebEngine qtpy
+        fi
+    fi
+    log_success "Desktop pywebview package installed."
     cd "$ROOT_DIR"
 }
 

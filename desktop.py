@@ -32,10 +32,35 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+def _ensure_linux_gui_backend() -> None:
+    """On Linux, ensure either GTK (gi) or Qt WebEngine (qtpy) is available for pywebview."""
+    if platform.system() != "Linux":
+        return
+    has_gtk = importlib.util.find_spec("gi") is not None
+    has_qt = False
+    if importlib.util.find_spec("qtpy") is not None:
+        try:
+            from qtpy import QtWebEngineWidgets  # noqa: F401
+            has_qt = True
+        except Exception:
+            has_qt = False
+    if has_gtk or has_qt:
+        return
+    print("[INFO] Installing Qt WebEngine backend (PyQt6, PyQt6-WebEngine, qtpy) for pywebview...")
+    if importlib.util.find_spec("pip") is None:
+        raise RuntimeError(
+            "No GTK (gi) or Qt (PyQt6/qtpy) backend found and pip is not available."
+        )
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "PyQt6", "PyQt6-WebEngine", "qtpy"]
+    )
+
+
 # PyWebView Native Desktop Engine
 try:
     import webview
     from webview.menu import Menu, MenuAction, MenuSeparator
+    _ensure_linux_gui_backend()
 except ImportError:
     print("[INFO] 'pywebview' is not installed. Installing automatically...")
     try:
@@ -50,11 +75,16 @@ except ImportError:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pywebview"])
         import webview
         from webview.menu import Menu, MenuAction, MenuSeparator
+        _ensure_linux_gui_backend()
         print("[SUCCESS] 'pywebview' installed successfully.")
     except Exception as e:
         print(f"[ERROR] 'pywebview' is not installed and auto-installation failed: {e}")
         print("Please install pywebview (e.g. 'pip install pywebview' or via your OS package manager).")
         sys.exit(1)
+except Exception as e:
+    print(f"[ERROR] Failed to prepare pywebview GUI backend: {e}")
+    print("On Linux, install Qt backend via: pip install PyQt6 PyQt6-WebEngine qtpy")
+    sys.exit(1)
 
 # Application Paths
 ROOT_DIR = Path(__file__).resolve().parent
@@ -137,12 +167,21 @@ def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
         return s.connect_ex((host, port)) == 0
 
 
-def wait_for_service(url: str, name: str, timeout: float = 25.0, interval: float = 0.5) -> bool:
+def wait_for_service(
+    url: str,
+    name: str,
+    timeout: float = 25.0,
+    interval: float = 0.5,
+    proc: subprocess.Popen = None,
+) -> bool:
     """Poll URL until reachable."""
     start = time.time()
     req = urllib.request.Request(url, headers={"User-Agent": "CrossPanel-Desktop"})
     while time.time() - start < timeout:
         if _SHUTTING_DOWN:
+            return False
+        if proc is not None and proc.poll() is not None:
+            log("ERROR", f"{name} exited early with code {proc.returncode}.")
             return False
         try:
             with urllib.request.urlopen(req, timeout=0.8) as resp:
@@ -660,6 +699,169 @@ def apply_native_os_icons():
             log("DESKTOP", "Authentic macOS Cocoa system icons attached to native menus.")
         except Exception as e:
             log("WARN", f"Could not bind Cocoa native menu icons: {e}")
+    elif IS_LINUX:
+        _apply_linux_qt_menubar_async()
+
+
+def _apply_linux_qt_menubar(browser) -> None:
+    """Ensure the Qt menu bar is visible inside the Linux window with dark-mode contrast and native icons."""
+    try:
+        from qtpy.QtGui import QIcon
+        from qtpy.QtWidgets import QStyle
+
+        menubar = browser.menuBar()
+        if not menubar:
+            return
+
+        menubar.setNativeMenuBar(False)
+        menubar.setVisible(True)
+        menubar.setStyleSheet(
+            """
+            QMenuBar {
+                background-color: #0F172A;
+                color: #E2E8F0;
+                border-bottom: 1px solid #1E293B;
+                padding: 2px 6px;
+                font-size: 13px;
+            }
+            QMenuBar::item {
+                background: transparent;
+                padding: 4px 10px;
+                border-radius: 4px;
+            }
+            QMenuBar::item:selected, QMenuBar::item:pressed {
+                background-color: #1E293B;
+                color: #FFFFFF;
+            }
+            QMenu {
+                background-color: #0F172A;
+                color: #E2E8F0;
+                border: 1px solid #334155;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 10px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #2563EB;
+                color: #FFFFFF;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #1E293B;
+                margin: 4px 8px;
+            }
+            """
+        )
+
+        style = browser.style()
+        qt_std = QStyle.StandardPixmap
+        LINUX_ICON_MAP = {
+            "dashboard": ("utilities-system-monitor", qt_std.SP_ComputerIcon),
+            "telemetry": ("utilities-system-monitor", qt_std.SP_ComputerIcon),
+            "logs": ("text-x-generic", qt_std.SP_FileDialogDetailedView),
+            "ai devops": ("applications-science", qt_std.SP_DialogYesButton),
+            "docker": ("applications-system", qt_std.SP_DriveNetIcon),
+            "website": ("applications-internet", qt_std.SP_DriveNetIcon),
+            "virtual host": ("applications-internet", qt_std.SP_DriveNetIcon),
+            "application": ("applications-other", qt_std.SP_DesktopIcon),
+            "deployment": ("system-run", qt_std.SP_ArrowForward),
+            "git": ("system-run", qt_std.SP_ArrowForward),
+            "database": ("server-database", qt_std.SP_DriveHDIcon),
+            "phpmyadmin": ("applications-internet", qt_std.SP_DriveNetIcon),
+            "file": ("folder", qt_std.SP_DirIcon),
+            "directory": ("folder-open", qt_std.SP_DirOpenIcon),
+            "backup": ("document-save", qt_std.SP_DialogSaveButton),
+            "tunnel": ("network-workgroup", qt_std.SP_DriveNetIcon),
+            "firewall": ("security-high", qt_std.SP_MessageBoxWarning),
+            "security": ("security-high", qt_std.SP_MessageBoxWarning),
+            "waf": ("security-high", qt_std.SP_MessageBoxWarning),
+            "service": ("preferences-system", qt_std.SP_FileDialogListView),
+            "jenkins": ("system-run", qt_std.SP_MediaPlay),
+            "terminal": ("utilities-terminal", qt_std.SP_CommandLink),
+            "cron": ("appointment-new", qt_std.SP_BrowserReload),
+            "user": ("system-users", qt_std.SP_DialogOkButton),
+            "account": ("system-users", qt_std.SP_DialogOkButton),
+            "setting": ("preferences-system", qt_std.SP_FileDialogInfoView),
+            "preference": ("preferences-system", qt_std.SP_FileDialogInfoView),
+            "about": ("help-about", qt_std.SP_MessageBoxInformation),
+            "reload": ("view-refresh", qt_std.SP_BrowserReload),
+            "fullscreen": ("view-fullscreen", qt_std.SP_TitleBarMaxButton),
+            "zoom in": ("zoom-in", qt_std.SP_ArrowUp),
+            "zoom out": ("zoom-out", qt_std.SP_ArrowDown),
+            "help": ("help-contents", qt_std.SP_DialogHelpButton),
+            "docs": ("help-contents", qt_std.SP_DialogHelpButton),
+            "close": ("window-close", qt_std.SP_DialogCloseButton),
+        }
+
+        def populate_qt_menu(qmenu):
+            for action in qmenu.actions():
+                title = action.text().lower()
+                for key, (theme_name, fallback_sp) in LINUX_ICON_MAP.items():
+                    if key in title:
+                        icon = QIcon.fromTheme(theme_name)
+                        if icon.isNull():
+                            icon = style.standardIcon(fallback_sp)
+                        if not icon.isNull():
+                            action.setIcon(icon)
+                        break
+                submenu = action.menu()
+                if submenu is not None:
+                    populate_qt_menu(submenu)
+
+        for top_action in menubar.actions():
+            submenu = top_action.menu()
+            if submenu is not None:
+                populate_qt_menu(submenu)
+
+        log("DESKTOP", "Linux native Qt menu bar configured with high-contrast styling and system icons.")
+    except Exception as e:
+        log("WARN", f"Could not configure Linux Qt menu bar: {e}")
+
+
+def _apply_linux_qt_menubar_async() -> None:
+    """Wait for the native Qt window to appear and configure its menu bar on the Qt main thread."""
+    global _WINDOW_REF
+    win = _WINDOW_REF
+    if not win:
+        return
+    try:
+        win.events.shown.wait(timeout=5.0)
+        native = getattr(win, "native", None)
+        if native and hasattr(native, "create_window_trigger"):
+            native.create_window_trigger.emit(lambda: _apply_linux_qt_menubar(native))
+    except Exception as e:
+        log("WARN", f"Could not schedule Linux Qt menu bar setup: {e}")
+
+
+def _is_virtual_gpu() -> bool:
+    """Detect common VM virtual GPU PCI vendor IDs on Linux DRM devices."""
+    virtual_vendors = {"0x15ad", "0x80ee", "0x1af4", "0x1234"}
+    drm_path = Path("/sys/class/drm")
+    if not drm_path.exists():
+        return False
+    for vendor_file in drm_path.glob("card*/device/vendor"):
+        try:
+            if vendor_file.read_text(encoding="utf-8").strip().lower() in virtual_vendors:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _configure_linux_qt_env() -> None:
+    """Prevent QtWebEngine EGL/GBM NativePixmap crashes on Wayland and VM GPUs."""
+    if not IS_LINUX:
+        return
+    if _is_virtual_gpu() or os.environ.get("WAYLAND_DISPLAY"):
+        existing_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").split()
+        for flag in ("--disable-gpu", "--disable-gpu-compositing"):
+            if flag not in existing_flags:
+                existing_flags.append(flag)
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(existing_flags)
+    if _is_virtual_gpu():
+        os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
 
 
 def on_gui_ready():
@@ -704,12 +906,12 @@ def main():
 
     # Start backend & frontend services if needed
     if not args.no_servers:
-        start_backend(args.backend_port)
-        start_frontend(args.frontend_port)
+        backend_proc = start_backend(args.backend_port)
+        frontend_proc = start_frontend(args.frontend_port)
 
         # Wait for backend & frontend to respond
-        wait_for_service(api_url, "Backend API", timeout=20.0)
-        wait_for_service(target_url, "Frontend UI", timeout=25.0)
+        wait_for_service(api_url, "Backend API", timeout=20.0, proc=backend_proc)
+        wait_for_service(target_url, "Frontend UI", timeout=25.0, proc=frontend_proc)
 
     # Initialize Native Desktop API Bridge
     api = DesktopApi()
@@ -754,10 +956,17 @@ def main():
     window.events.closing += on_closing
     window.events.closed += on_closed
 
+    # Avoid noisy GTK traceback on Linux when only Qt WebEngine is installed
+    selected_gui = None
+    if IS_LINUX and importlib.util.find_spec("gi") is None and importlib.util.find_spec("qtpy") is not None:
+        selected_gui = "qt"
+        _configure_linux_qt_env()
+
     # Start PyWebView Event Loop with native menu, icon, and OS icon injector
     try:
         webview.start(
             func=on_gui_ready,
+            gui=selected_gui,
             debug=args.debug,
             menu=native_menus,
             icon=icon_path if icon_path else None,
