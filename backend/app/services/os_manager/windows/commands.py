@@ -76,166 +76,51 @@ class WindowsCommands:
 
     @classmethod
     async def get_service_status(cls, service_name: str) -> Dict[str, Any]:
-        targets = cls.SERVICE_MAP.get(service_name.lower(), [service_name])
-        # 1. Check Windows Services
-        for target in targets:
-            cmd = f"Get-Service -Name '{target}' -ErrorAction SilentlyContinue | Select-Object -Property Name, Status, StartType | ConvertTo-Json"
-            res = await cls.run_powershell(cmd)
-            if res["success"] and res["stdout"]:
-                import json
-                try:
-                    data = json.loads(res["stdout"])
-                    status_val = str(data.get("Status", 4)).lower()
-                    # 4 is Running, 1 is Stopped in PowerShell ServiceControllerStatus enum
-                    is_running = "running" in status_val or status_val == "4"
-                    return {
-                        "name": service_name,
-                        "system_name": target,
-                        "status": "running" if is_running else "stopped",
-                        "is_active": is_running,
-                        "installed": True
-                    }
-                except Exception:
-                    pass
-
-        # 2. Check running processes
-        proc_names = cls.PROCESS_MAP.get(service_name.lower(), [service_name])
-        names_str = ",".join([f"'{p}'" for p in proc_names])
-        chk_proc_cmd = f"Get-Process -Name {names_str} -ErrorAction SilentlyContinue | Select-Object -First 1 -Property ProcessName, Id | ConvertTo-Json"
-        res_proc = await cls.run_powershell(chk_proc_cmd)
-        if res_proc["success"] and res_proc["stdout"]:
-            return {
-                "name": service_name,
-                "system_name": proc_names[0],
-                "status": "running",
-                "is_active": True,
-                "installed": True
-            }
-
-        # 3. Check if binary is installed on host
-        bin_path = cls.find_binary(service_name)
-        if bin_path:
-            return {
-                "name": service_name,
-                "system_name": os.path.basename(bin_path),
-                "status": "stopped",
-                "is_active": False,
-                "installed": True
-            }
-
-        # Fallback
-        return {
-            "name": service_name,
-            "system_name": service_name,
-            "status": "stopped",
-            "is_active": False,
-            "installed": False
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.detect_package(service_name)
 
     @classmethod
     async def start_service(cls, service_name: str) -> Dict[str, Any]:
-        targets = cls.SERVICE_MAP.get(service_name.lower(), [service_name])
-        # 1. Try Windows Service first
-        for target in targets:
-            chk = await cls.run_powershell(f"Get-Service -Name '{target}' -ErrorAction SilentlyContinue")
-            if chk["success"] and chk["stdout"]:
-                cmd = f"Start-Service -Name '{target}' -ErrorAction SilentlyContinue"
-                await cls.run_powershell(cmd)
-                status = await cls.get_service_status(service_name)
-                if status["is_active"]:
-                    return {"success": True, "message": f"Windows Service {service_name} ({target}) started successfully."}
-
-        # 2. If not a service or service start failed, check if binary can be launched
+        from app.services.package_manager import PackageManagerService
+        res = await PackageManagerService.control_service(service_name, "start")
+        if res.get("success"):
+            return res
+        # Fallback: direct binary launch if Windows service isn't registered
         bin_path = cls.find_binary(service_name)
         if bin_path and os.path.isfile(bin_path):
             dir_path = os.path.dirname(bin_path)
-            args = ""
-            if service_name.lower() in ["php-fpm", "php"]:
-                args = "-ArgumentList '-b 127.0.0.1:9000'"
+            args = "-ArgumentList '-b 127.0.0.1:9000'" if service_name.lower() in ["php-fpm", "php"] else ""
             launch_cmd = f"Start-Process -FilePath '{bin_path}' -WorkingDirectory '{dir_path}' {args} -WindowStyle Hidden"
             await cls.run_powershell(launch_cmd)
-            await asyncio.sleep(0.6)
-            status = await cls.get_service_status(service_name)
-            if status["is_active"]:
-                return {"success": True, "message": f"Native process {service_name} started via {bin_path}."}
-            return {"success": True, "message": f"Native process {service_name} launched in background."}
-
-        return {"success": False, "message": f"Service {service_name} binary not found on host."}
+            await asyncio.sleep(0.5)
+            return {"success": True, "requires_terminal": False, "message": f"Native process {service_name} started via {bin_path}."}
+        return res
 
     @classmethod
     async def stop_service(cls, service_name: str) -> Dict[str, Any]:
-        targets = cls.SERVICE_MAP.get(service_name.lower(), [service_name])
-        # Stop Windows Service if active
-        for target in targets:
-            await cls.run_powershell(f"Stop-Service -Name '{target}' -Force -ErrorAction SilentlyContinue")
-
-        # Stop processes
+        from app.services.package_manager import PackageManagerService
+        res = await PackageManagerService.control_service(service_name, "stop")
         proc_names = cls.PROCESS_MAP.get(service_name.lower(), [service_name])
         for p in proc_names:
             await cls.run_powershell(f"Stop-Process -Name '{p}' -Force -ErrorAction SilentlyContinue")
-
-        await asyncio.sleep(0.3)
-        status = await cls.get_service_status(service_name)
-        if not status["is_active"]:
-            return {"success": True, "message": f"Service {service_name} stopped successfully."}
-        return {"success": True, "message": f"Service {service_name} stop command issued."}
+        return res
 
     @classmethod
     async def restart_service(cls, service_name: str) -> Dict[str, Any]:
         await cls.stop_service(service_name)
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.6)
         return await cls.start_service(service_name)
 
     @classmethod
-    async def install_service(cls, service_name: str) -> Dict[str, Any]:
-        # Check if already installed
-        status = await cls.get_service_status(service_name)
-        if status.get("installed"):
-            return {
-                "success": True,
-                "message": f"Native service {service_name} is already installed and available on this host."
-            }
+    async def install_service(cls, service_name: str, version: Optional[str] = None) -> Dict[str, Any]:
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.install_package(service_name, version=version)
 
-        choco_map = {
-            "nginx": "nginx",
-            "php-fpm": "php",
-            "php": "php",
-            "mariadb": "mariadb",
-            "mysql": "mysql",
-            "redis": "redis-64",
-            "postgresql": "postgresql",
-            "nodejs": "nodejs",
-            "python": "python"
-        }
-        pkg = choco_map.get(service_name.lower(), service_name.lower())
-        if shutil.which("choco"):
-            cmd = f"choco install {pkg} -y --no-progress"
-            res = await cls.run_powershell(cmd)
-            if res["success"]:
-                return {
-                    "success": True,
-                    "package": pkg,
-                    "manager": "chocolatey",
-                    "message": f"Native package {service_name} ({pkg}) installed successfully via Chocolatey."
-                }
-
-        if shutil.which("winget"):
-            cmd = f"winget install {pkg} --accept-package-agreements --accept-source-agreements --silent"
-            res = await cls.run_powershell(cmd)
-            if res["success"]:
-                return {
-                    "success": True,
-                    "package": pkg,
-                    "manager": "winget",
-                    "message": f"Native package {service_name} installed successfully via Windows Package Manager."
-                }
-
-        return {
-            "success": True,
-            "package": pkg,
-            "manager": "windows-native",
-            "message": f"Native host environment prepared for {service_name}. Daemon ready for execution without Docker."
-        }
+    @classmethod
+    async def uninstall_service(cls, service_name: str) -> Dict[str, Any]:
+        from app.services.package_manager import PackageManagerService
+        await cls.stop_service(service_name)
+        return await PackageManagerService.uninstall_package(service_name)
 
     @classmethod
     async def get_firewall_rules(cls) -> List[Dict[str, Any]]:

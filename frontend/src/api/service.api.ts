@@ -17,8 +17,19 @@ export const serviceApi = {
     apiClient.post<ServiceActionResult>(`/service/${serviceName}/mode`, { mode }),
 
   install: (serviceName: string, mode?: "native" | "docker", version?: string) =>
-    apiClient.post<{ success: boolean; name: string; mode: string; message: string }>(
+    apiClient.post<ServiceActionResult>(
       `/service/${serviceName}/install`,
       { mode: mode || "native", version: version || "latest" }
+    ),
+
+  uninstall: (serviceName: string, mode?: "native" | "docker") =>
+    apiClient.post<ServiceActionResult>(
+      `/service/${serviceName}/uninstall`,
+      { mode: mode || "native" }
+    ),
+
+  logs: (serviceName: string, mode?: "native" | "docker", lines = 80) =>
+    apiClient.get<{ name: string; mode: string; logs: string }>(
+      `/service/${serviceName}/logs?lines=${lines}${mode ? `&mode=${mode}` : ""}`
     ),
 };

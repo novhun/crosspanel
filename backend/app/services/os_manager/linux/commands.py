@@ -1,7 +1,7 @@
 import asyncio
 import shutil
 import platform
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class LinuxCommands:
     SERVICE_MAP = {
@@ -57,67 +57,33 @@ class LinuxCommands:
 
     @classmethod
     async def get_service_status(cls, service_name: str) -> Dict[str, Any]:
-        linux_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"systemctl is-active {linux_svc}"
-        res = await cls.run_bash(cmd)
-        is_active = res["stdout"] == "active"
-        return {
-            "name": service_name,
-            "system_name": linux_svc,
-            "status": "running" if is_active else "stopped",
-            "is_active": is_active,
-            "installed": True
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.detect_package(service_name)
 
     @classmethod
     async def start_service(cls, service_name: str) -> Dict[str, Any]:
-        linux_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"systemctl start {linux_svc}"
-        res = await cls.run_bash(cmd)
-        return {
-            "success": res["success"],
-            "message": f"Service {service_name} started via systemctl" if res["success"] else res["stderr"]
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.control_service(service_name, "start")
 
     @classmethod
     async def stop_service(cls, service_name: str) -> Dict[str, Any]:
-        linux_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"systemctl stop {linux_svc}"
-        res = await cls.run_bash(cmd)
-        return {
-            "success": res["success"],
-            "message": f"Service {service_name} stopped via systemctl" if res["success"] else res["stderr"]
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.control_service(service_name, "stop")
 
     @classmethod
     async def restart_service(cls, service_name: str) -> Dict[str, Any]:
-        linux_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"systemctl restart {linux_svc}"
-        res = await cls.run_bash(cmd)
-        return {
-            "success": res["success"],
-            "message": f"Service {service_name} restarted via systemctl" if res["success"] else res["stderr"]
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.control_service(service_name, "restart")
 
     @classmethod
-    async def install_service(cls, service_name: str) -> Dict[str, Any]:
-        linux_pkg_map = {
-            "nginx": "nginx",
-            "php-fpm": "php8.2-fpm",
-            "mariadb": "mariadb-server",
-            "redis": "redis-server",
-            "postgresql": "postgresql postgresql-contrib",
-            "nodejs": "nodejs npm"
-        }
-        pkg = linux_pkg_map.get(service_name.lower(), service_name.lower())
-        cmd = f"which apt-get >/dev/null 2>&1 && (DEBIAN_FRONTEND=noninteractive apt-get update -y && apt-get install -y {pkg}) || (yum install -y {pkg})"
-        res = await cls.run_bash(cmd)
-        return {
-            "success": res["success"],
-            "package": pkg,
-            "manager": "apt/yum",
-            "message": f"Native package {service_name} ({pkg}) installed on Linux." if res["success"] else res["stderr"]
-        }
+    async def install_service(cls, service_name: str, version: Optional[str] = None) -> Dict[str, Any]:
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.install_package(service_name, version=version)
+
+    @classmethod
+    async def uninstall_service(cls, service_name: str) -> Dict[str, Any]:
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.uninstall_package(service_name)
 
     @classmethod
     async def get_firewall_rules(cls) -> List[Dict[str, Any]]:

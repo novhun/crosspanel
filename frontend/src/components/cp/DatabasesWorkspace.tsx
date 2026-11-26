@@ -1,15 +1,34 @@
 import { useState, useEffect } from "react";
-import { Archive, Box, Cable, Clock3, Database, Download, HardDrive, Plus, RefreshCw, RotateCw, Settings2, Loader2 } from "lucide-react";
+import {
+  Archive,
+  Box,
+  Cable,
+  Clock3,
+  Cpu,
+  Database,
+  Download,
+  HardDrive,
+  Loader2,
+  Play,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  Settings2,
+  Square,
+  SquareTerminal,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AppVersionActions } from "./AppVersionActions";
+import { XTermTerminal } from "./XTermTerminal";
 import { DemoEditor, type DemoRow } from "./DemoEditor";
 import { PageHeader, Pill, inputCls } from "./ui";
 import { databaseEngineDefaults, databaseRows, validateDatabaseEngine, validateDatabaseRecord, type DatabaseEngine } from "./database-data";
-import { databaseApi } from "@/api/database.api";
+import { databaseApi, type EngineActionResponse, type LiveDatabaseEngine } from "@/api/database.api";
 
 type Snapshot = { id: number; name: string; engine: string; time: string; size: string };
 const sampleSizes: Record<string, number> = { wp_production: 248, api_core: 86, analytics: 412, shop_db: 124, postgres: 28, crosspanel_db: 6 };
@@ -17,7 +36,8 @@ const sampleCounts: Record<string, number> = { wp_production: 12, api_core: 24, 
 const preview = (message: string) => toast(message, { description: "Demo only — no database connection or server change." });
 
 export function DatabasesWorkspace() {
-  const [engines, setEngines] = useState(databaseEngineDefaults);
+  const [engines, setEngines] = useState<DatabaseEngine[]>(databaseEngineDefaults);
+  const [liveMeta, setLiveMeta] = useState<Record<string, LiveDatabaseEngine>>({});
   const [rows, setRows] = useState(databaseRows);
   const [tab, setTab] = useState("configuration");
   const [draft, setDraft] = useState<DatabaseEngine>();
@@ -32,6 +52,8 @@ export function DatabasesWorkspace() {
   const [isLive, setIsLive] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [busyEngine, setBusyEngine] = useState<string | null>(null);
+  const [pkgTerminal, setPkgTerminal] = useState<{ title: string; command: string }>();
 
   const loadLiveDatabaseData = async () => {
     try {
@@ -44,32 +66,52 @@ export function DatabasesWorkspace() {
       if (enginesRes.status === "fulfilled" && Array.isArray(enginesRes.value)) {
         setIsLive(true);
         const liveEngines = enginesRes.value;
-        setEngines((current) =>
-          current.map((item) => {
-            const match = liveEngines.find(
-              (e) => e.name.toLowerCase() === item.name.toLowerCase()
-            );
-            if (match) {
-              return {
-                ...item,
-                installed: match.installed,
-                version: match.version || item.version,
-                port: String(match.port || item.port),
-                bind: match.bind || item.bind,
-                auto: match.status === "running",
-                mode: match.active_mode || "native"
-              };
+        const metaMap: Record<string, LiveDatabaseEngine> = {};
+        for (const le of liveEngines) {
+          metaMap[le.name.toLowerCase()] = le;
+        }
+        setLiveMeta(metaMap);
+
+        setEngines(() => {
+          const merged: DatabaseEngine[] = databaseEngineDefaults.map((item) => {
+            const match = metaMap[item.name.toLowerCase()];
+            if (!match) return item;
+            return {
+              ...item,
+              installed: match.installed,
+              version: match.version || (match.installed ? item.version : ""),
+              port: String(match.port || item.port),
+              bind: match.bind || item.bind,
+              auto: match.status === "running",
+            };
+          });
+          for (const le of liveEngines) {
+            if (!merged.some((m) => m.name.toLowerCase() === le.name.toLowerCase())) {
+              merged.push({
+                name: le.name,
+                versions: le.name === "Redis" ? ["7.4", "7.2"] : [le.version || "latest"],
+                version: le.version || "",
+                installed: le.installed,
+                port: String(le.port || 0),
+                bind: le.bind || "127.0.0.1",
+                auto: le.status === "running",
+                connections: "100",
+                memory: "128",
+                description: le.description || le.category,
+                config: `# ${le.name} configuration\nbind = ${le.bind || "127.0.0.1"}\nport = ${le.port || 0}`,
+              });
             }
-            return item;
-          })
-        );
+          }
+          return merged;
+        });
       }
 
-      if (listRes.status === "fulfilled" && Array.isArray(listRes.value) && listRes.value.length > 0) {
+      if (listRes.status === "fulfilled" && Array.isArray(listRes.value)) {
         setIsLive(true);
         setRows(
           listRes.value.map((db, idx) => ({
             id: db.id || idx + 1,
+            enabled: true,
             values: {
               name: db.name,
               engine: db.engine,
@@ -79,7 +121,7 @@ export function DatabasesWorkspace() {
         );
       }
 
-      if (backupsRes.status === "fulfilled" && Array.isArray(backupsRes.value) && backupsRes.value.length > 0) {
+      if (backupsRes.status === "fulfilled" && Array.isArray(backupsRes.value)) {
         setSnapshots(
           backupsRes.value.map((b) => ({
             id: b.id,
@@ -100,6 +142,70 @@ export function DatabasesWorkspace() {
       loadLiveDatabaseData();
     }
   }, []);
+
+  function handleEngineResponse(title: string, res: EngineActionResponse, successMsg: string) {
+    if (res.requires_terminal && res.command) {
+      setPkgTerminal({ title, command: res.command });
+      return false;
+    }
+    if (res.success) {
+      toast.success(res.message || successMsg);
+      return true;
+    }
+    toast.error(res.message || `${title} failed`);
+    return false;
+  }
+
+  async function installEngine(engineName: string, mode: "native" | "docker", version: string) {
+    setBusyEngine(`${engineName}:install`);
+    try {
+      const res = await databaseApi.installEngine(engineName, mode, version);
+      const ok = handleEngineResponse(
+        `Install ${engineName} (${mode === "docker" ? "Docker" : "Native OS"})`,
+        res,
+        `${engineName} installed (${mode})`
+      );
+      if (ok) await loadLiveDatabaseData();
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to install ${engineName}`);
+    } finally {
+      setBusyEngine(null);
+    }
+  }
+
+  async function uninstallEngine(engineName: string, mode: "native" | "docker") {
+    setBusyEngine(`${engineName}:uninstall`);
+    try {
+      const res = await databaseApi.uninstallEngine(engineName, mode);
+      const ok = handleEngineResponse(
+        `Uninstall ${engineName} (${mode === "docker" ? "Docker" : "Native OS"})`,
+        res,
+        `${engineName} uninstalled (${mode})`
+      );
+      if (ok) await loadLiveDatabaseData();
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to uninstall ${engineName}`);
+    } finally {
+      setBusyEngine(null);
+    }
+  }
+
+  async function controlEngine(engineName: string, action: "start" | "stop" | "restart", mode?: "native" | "docker") {
+    setBusyEngine(`${engineName}:${action}`);
+    try {
+      const res = await databaseApi.controlEngine(engineName, action, mode);
+      const ok = handleEngineResponse(
+        `${action.toUpperCase()} ${engineName}`,
+        res,
+        `${engineName} ${action} completed`
+      );
+      if (ok) await loadLiveDatabaseData();
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to ${action} ${engineName}`);
+    } finally {
+      setBusyEngine(null);
+    }
+  }
 
   async function backup(row: DemoRow) {
     const dbName = row.values['name'] ?? "";
@@ -137,17 +243,7 @@ export function DatabasesWorkspace() {
         );
       }
     } catch {
-      setSnapshots((current) => [
-        {
-          id: (current[0]?.id ?? 0) + 1,
-          name: dbName,
-          engine: engineName,
-          time: `Backup · ${new Date().toLocaleTimeString()}`,
-          size: "16 MB",
-        },
-        ...current,
-      ]);
-      toast.info(`Snapshot generated for ${dbName} (local backup)`);
+      toast.error(`Snapshot failed for ${dbName}`);
     } finally {
       setIsBackingUp(false);
     }
@@ -168,7 +264,7 @@ export function DatabasesWorkspace() {
         toast.success(res.message || `Database ${added.values['name']} created.`);
         loadLiveDatabaseData();
       } catch (err: any) {
-        toast.error(err?.response?.data?.detail || "Failed to create database on host.");
+        toast.error(err?.message || "Failed to create database on host.");
       }
     }
 
@@ -210,16 +306,18 @@ export function DatabasesWorkspace() {
 
   const connection = engines.find((engine) => engine.name === details?.values['engine']);
   function configure(engine: DatabaseEngine) { setDraft({ ...engine }); setError(""); }
+  const firstOs = Object.values(liveMeta)[0]?.os_type;
+  const osBadge = firstOs ? ` · ${firstOs.toUpperCase()}` : "";
 
   return (
     <>
       <PageHeader
         title="Databases"
-        desc="Database engines, records & backup snapshots"
+        desc="Native & Docker database engines (Linux / macOS / Windows), records & snapshots"
         action={
           <div className="flex flex-wrap items-center gap-3">
             <Pill tone={isLive ? "success" : "muted"}>
-              {isLive ? "● Connected (Live API & PC)" : "Demo · Not connected"}
+              {isLive ? `● Connected (Live OS${osBadge})` : "Demo · Not connected"}
             </Pill>
             <Button
               variant="outline"
@@ -271,53 +369,86 @@ export function DatabasesWorkspace() {
             </Button>
           </div>
           <div className="mb-8 grid gap-4 xl:grid-cols-3">
-            {engines.map((engine) => (
-              <article key={engine.name} aria-label={`${engine.name} engine`} className="min-w-0 rounded-lg border border-border bg-card p-4">
-                <div className="flex items-start gap-3">
-                  <div className={`grid size-10 shrink-0 place-items-center rounded-lg ${engine.name === "MariaDB" ? "bg-warning/10 text-warning" : engine.name === "MongoDB" ? "bg-success/10 text-success" : "bg-primary/15 text-cyan"}`}>
-                    <Database className="size-5" />
+            {engines.map((engine) => {
+              const meta = liveMeta[engine.name.toLowerCase()];
+              const mode = meta?.active_mode || "native";
+              const isRunning = engine.installed && engine.auto;
+              const isEmbedded = meta?.canonical_name === "sqlite";
+
+              return (
+                <article key={engine.name} aria-label={`${engine.name} engine`} className="min-w-0 rounded-lg border border-border bg-card p-4">
+                  <div className="flex items-start gap-3">
+                    <div className={`grid size-10 shrink-0 place-items-center rounded-lg ${engine.name === "MariaDB" ? "bg-warning/10 text-warning" : engine.name === "MongoDB" ? "bg-success/10 text-success" : "bg-primary/15 text-cyan"}`}>
+                      <Database className="size-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-semibold">{engine.name}</h3>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                        {engine.version && <span className="font-mono text-xs text-muted-foreground">v{engine.version.split("-")[0]}</span>}
+                        <Pill tone={mode === "docker" ? "primary" : "success"}>
+                          {mode === "docker" ? "Docker" : "Native"}
+                        </Pill>
+                      </div>
+                    </div>
+                    <Pill tone={isRunning ? "success" : "muted"}>
+                      {engine.installed ? (isRunning ? "Running" : "Stopped") : "Not Installed"}
+                    </Pill>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-sm font-semibold">{engine.name}</h3>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="font-mono text-xs text-muted-foreground">v{engine.version}</span>
-                      <Pill tone={(engine as any).mode === "docker" ? "primary" : "success"}>
-                        {(engine as any).mode === "docker" ? "Docker" : "Native"}
-                      </Pill>
+                  <p className="my-4 break-all font-mono text-xs text-muted-foreground">
+                    {engine.installed
+                      ? (Number(engine.port) > 0 ? `${engine.bind}:${engine.port}` : "Embedded local engine")
+                      : (isLive ? "Not installed on host or Docker" : "No demo installation")}
+                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                    <span className="text-xs text-muted-foreground">
+                      {engine.installed ? (isRunning ? "Listening" : "Stopped") : "Available"}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {isLive && engine.installed && !isEmbedded && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant={isRunning ? "outline" : "default"}
+                            className="h-8 px-2 text-xs"
+                            disabled={busyEngine === `${engine.name}:start` || busyEngine === `${engine.name}:stop`}
+                            onClick={() => controlEngine(engine.name, isRunning ? "stop" : "start", mode)}
+                          >
+                            {isRunning ? <Square className="size-3.5 mr-1" /> : <Play className="size-3.5 mr-1" />}
+                            {isRunning ? "Stop" : "Start"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="h-8 px-2 text-xs"
+                            disabled={busyEngine === `${engine.name}:uninstall`}
+                            onClick={() => uninstallEngine(engine.name, mode)}
+                            title={`Uninstall ${engine.name} (${mode})`}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </>
+                      )}
+                      {engine.installed && Number(engine.port) > 0 && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 px-2 text-xs"
+                          disabled={isTesting}
+                          onClick={() => handleTestConnection(engine)}
+                          title="Test TCP connection"
+                        >
+                          <Cable className="size-3.5 mr-1" />Ping
+                        </Button>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => engine.installed ? configure(engine) : setTab("installation")}>
+                        {engine.installed ? <Settings2 /> : <Download />}
+                        {engine.installed ? "Configure" : "Install"}
+                      </Button>
                     </div>
                   </div>
-                  <Pill tone={engine.installed ? "success" : "muted"}>
-                    {engine.installed ? (engine.auto ? "Running" : "Installed") : "Available"}
-                  </Pill>
-                </div>
-                <p className="my-4 break-all font-mono text-xs text-muted-foreground">
-                  {engine.installed ? `${engine.bind}:${engine.port}` : "No demo installation"}
-                </p>
-                <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
-                  <span className="text-xs text-muted-foreground">
-                    {engine.installed ? `Auto-start ${engine.auto ? "on" : "off"}` : "Sample versions"}
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    {engine.installed && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-8 px-2 text-xs"
-                        disabled={isTesting}
-                        onClick={() => handleTestConnection(engine)}
-                        title="Test TCP connection"
-                      >
-                        <Cable className="size-3.5 mr-1" />Ping
-                      </Button>
-                    )}
-                    <Button size="sm" variant="outline" onClick={() => engine.installed ? configure(engine) : setTab("installation")}>
-                      {engine.installed ? <Settings2 /> : <Download />}
-                      {engine.installed ? "Configure" : "Install"}
-                    </Button>
-                  </div>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
           <DemoEditor
             title="All Databases"
@@ -398,44 +529,68 @@ export function DatabasesWorkspace() {
         <TabsContent value="installation">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-semibold">Engine library</h2>
-            <Pill tone="muted">Verified releases</Pill>
+            <Pill tone="muted">Native OS &amp; Docker releases</Pill>
           </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {engines.map((engine) => (
-              <article key={engine.name} className="flex min-w-0 flex-col rounded-lg border border-border bg-card p-5">
-                <Database className="mb-4 size-7 text-cyan" />
-                <h2 className="font-semibold">{engine.name}</h2>
-                <p className="mb-4 mt-2 text-xs text-muted-foreground">{engine.description}</p>
-                <div className="mb-5">
-                  <Pill tone={engine.installed ? "success" : "muted"}>
-                    {engine.installed ? `Installed · ${engine.version} · Active` : "Not installed · Available"}
-                  </Pill>
-                </div>
-                <AppVersionActions
-                  name={engine.name}
-                  versions={engine.versions}
-                  onInstallPreview={async (version, mode) => {
-                    setEngines((current) =>
-                      current.map((item) =>
-                        item.name === engine.name ? { ...item, installed: true, version, mode: mode || "native" } : item
-                      )
-                    );
-                    if (import.meta.env.MODE !== "test") {
-                      try {
-                        const res = await databaseApi.installEngine(engine.name, mode, version);
-                        toast.success(res.message);
-                        loadLiveDatabaseData();
-                      } catch {
-                        toast.info(`Engine ${engine.name} prepared on host.`);
+            {engines.map((engine) => {
+              const meta = liveMeta[engine.name.toLowerCase()];
+              return (
+                <article key={engine.name} className="flex min-w-0 flex-col rounded-lg border border-border bg-card p-5">
+                  <Database className="mb-4 size-7 text-cyan" />
+                  <h2 className="font-semibold">{engine.name}</h2>
+                  <p className="mb-4 mt-2 text-xs text-muted-foreground">{engine.description}</p>
+                  <div className="mb-5 flex flex-wrap gap-1.5">
+                    <Pill tone={engine.installed ? "success" : "muted"}>
+                      {engine.installed ? `Installed${engine.version ? ` · ${engine.version.split("-")[0]}` : ""}` : "Not installed · Available"}
+                    </Pill>
+                    {isLive && meta?.native_installed && (
+                      <Pill tone={meta.native_running ? "success" : "primary"}>
+                        <Cpu className="size-3 mr-1 inline" />Native
+                      </Pill>
+                    )}
+                    {isLive && meta?.docker_installed && (
+                      <Pill tone={meta.docker_running ? "success" : "primary"}>
+                        <Box className="size-3 mr-1 inline" />Docker
+                      </Pill>
+                    )}
+                  </div>
+                  <AppVersionActions
+                    name={engine.name}
+                    versions={engine.versions}
+                    allowDocker={meta ? meta.docker_supported : true}
+                    installed={engine.installed}
+                    nativeInstalled={meta?.native_installed}
+                    dockerInstalled={meta?.docker_installed}
+                    dockerAvailable={meta?.docker_available ?? true}
+                    defaultMode={meta?.active_mode || "native"}
+                    installCommand={meta?.install_command}
+                    uninstallCommand={meta?.uninstall_command}
+                    onInstallPreview={(version, mode) => {
+                      if (import.meta.env.MODE === "test") {
+                        setEngines((current) =>
+                          current.map((item) =>
+                            item.name === engine.name ? { ...item, installed: true, version, mode: mode || "native" } : item
+                          )
+                        );
                       }
+                    }}
+                    onInstall={async (version, mode) => {
+                      await installEngine(engine.name, mode, version);
+                    }}
+                    onUninstall={
+                      meta?.canonical_name === "sqlite"
+                        ? undefined
+                        : async (mode) => {
+                            await uninstallEngine(engine.name, mode);
+                          }
                     }
-                  }}
-                />
-                <Button variant="ghost" size="sm" className="mt-3" disabled={!engine.installed} onClick={() => configure(engine)}>
-                  <Settings2 />Configure
-                </Button>
-              </article>
-            ))}
+                  />
+                  <Button variant="ghost" size="sm" className="mt-3" disabled={!engine.installed} onClick={() => configure(engine)}>
+                    <Settings2 />Configure
+                  </Button>
+                </article>
+              );
+            })}
           </div>
         </TabsContent>
         <TabsContent value="backups">
@@ -580,6 +735,40 @@ export function DatabasesWorkspace() {
             <Button variant="outline" onClick={() => setRestore(undefined)}>Cancel</Button>
             <Button disabled={!confirmed} onClick={() => { preview(`Restore preview: ${restore?.name}`); setRestore(undefined); setConfirmed(false); }}>
               <RotateCw />Restore preview
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={pkgTerminal !== undefined}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPkgTerminal(undefined);
+            loadLiveDatabaseData();
+          }
+        }}
+      >
+        <DialogContent className="max-h-[92dvh] sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <SquareTerminal className="size-5 text-cyan" />
+              {pkgTerminal?.title}
+            </DialogTitle>
+            <DialogDescription className="break-all font-mono text-xs">
+              {pkgTerminal?.command}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="h-[55vh] w-full overflow-hidden rounded-lg border border-border bg-[#0B0F19]">
+            {pkgTerminal && <XTermTerminal active={true} initialCommand={pkgTerminal.command} />}
+          </div>
+          <div className="flex justify-end">
+            <Button
+              onClick={() => {
+                setPkgTerminal(undefined);
+                loadLiveDatabaseData();
+              }}
+            >
+              Done &amp; Refresh Status
             </Button>
           </div>
         </DialogContent>

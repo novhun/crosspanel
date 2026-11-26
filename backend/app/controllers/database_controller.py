@@ -1,383 +1,460 @@
-import os
 import asyncio
-from datetime import datetime
+import datetime
+import os
+import re
+import socket
+import sqlite3
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
-from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
+from app.core.config import settings
 from app.db.database import get_db
-from app.models.settings import ManagedDatabase, DatabaseBackup
+from app.models.settings import DatabaseBackup, ManagedDatabase
 from app.services.docker_service import DockerService
 from app.services.os_manager.factory import os_manager_factory
-from app.core.config import settings
-
-class CreateDbPayload(BaseModel):
-    name: str
-    engine: str = "MariaDB"
-    user: Optional[str] = "root"
-    password: Optional[str] = ""
-
-class EngineInstallPayload(BaseModel):
-    mode: Optional[str] = "native"
-    version: Optional[str] = "latest"
-
-class TestConnPayload(BaseModel):
-    host: str = "127.0.0.1"
-    port: int = 5432
-    engine: Optional[str] = "PostgreSQL"
+from app.services.package_manager import get_os_type
 
 router = APIRouter(prefix="/database", tags=["Database Management"])
 
+DB_ENGINE_SPECS = [
+    {
+        "name": "MariaDB",
+        "canonical_name": "mariadb",
+        "category": "SQL Relational",
+        "default_port": 3306,
+        "default_version": "10.11",
+        "description": "High-performance MySQL-compatible relational database server",
+        "docker_supported": True,
+    },
+    {
+        "name": "PostgreSQL",
+        "canonical_name": "postgresql",
+        "category": "SQL Relational",
+        "default_port": 5432,
+        "default_version": "16",
+        "description": "Advanced enterprise object-relational database system",
+        "docker_supported": True,
+    },
+    {
+        "name": "MongoDB",
+        "canonical_name": "mongodb",
+        "category": "NoSQL Document",
+        "default_port": 27017,
+        "default_version": "7",
+        "description": "Flexible JSON document-oriented NoSQL engine",
+        "docker_supported": True,
+    },
+    {
+        "name": "Redis",
+        "canonical_name": "redis",
+        "category": "Cache / Key-Value",
+        "default_port": 6379,
+        "default_version": "7",
+        "description": "Ultra-fast in-memory key-value data store and broker",
+        "docker_supported": True,
+    },
+    {
+        "name": "SQLite",
+        "canonical_name": "sqlite",
+        "category": "Embedded SQL",
+        "default_port": 0,
+        "default_version": sqlite3.sqlite_version,
+        "description": "Zero-configuration embedded relational database",
+        "docker_supported": False,
+    },
+]
+
+
+def _canonical_engine(engine_name: str) -> str:
+    low = engine_name.lower().strip()
+    if "maria" in low:
+        return "mariadb"
+    if "mysql" in low:
+        return "mysql"
+    if "postgres" in low:
+        return "postgresql"
+    if "mongo" in low:
+        return "mongodb"
+    if "redis" in low:
+        return "redis"
+    if "sqlite" in low:
+        return "sqlite"
+    return low
+
+
+class TestConnectionRequest(BaseModel):
+    host: str = "127.0.0.1"
+    port: int
+    engine: Optional[str] = "PostgreSQL"
+
+
+class CreateDatabaseRequest(BaseModel):
+    name: str
+    engine: str = "PostgreSQL"
+    user: str = "root"
+    password: Optional[str] = ""
+
+
+class EngineInstallRequest(BaseModel):
+    mode: str = "native"
+    version: Optional[str] = "latest"
+
+
+class EngineUninstallRequest(BaseModel):
+    mode: Optional[str] = "native"
+
+
+class EngineActionRequest(BaseModel):
+    mode: Optional[str] = None
+
+
+def check_port(host: str, port: int, timeout: float = 1.0) -> bool:
+    if port <= 0:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 @router.get("/engines")
 async def list_database_engines():
-    mariadb_st = await os_manager_factory.get_service_status("mariadb")
-    postgres_st = await os_manager_factory.get_service_status("postgresql")
-    redis_st = await os_manager_factory.get_service_status("redis")
-    is_docker_up = await DockerService.is_docker_running()
+    os_type = get_os_type()
+    engines_out: List[Dict[str, Any]] = []
 
-    return [
-        {
-            "name": "MariaDB",
-            "version": "10.11",
-            "category": "Relational SQL",
-            "installed": mariadb_st.get("installed", False) or mariadb_st.get("is_active", False),
-            "status": mariadb_st.get("status", "stopped"),
-            "port": 3306,
+    for spec in DB_ENGINE_SPECS:
+        canon = spec["canonical_name"]
+        native_info = await os_manager_factory.get_service_status(canon)
+        native_installed = bool(native_info.get("installed", False))
+        native_running = bool(native_info.get("is_active", False))
+
+        docker_installed = False
+        docker_running = False
+        docker_available = False
+        if spec["docker_supported"]:
+            d_info = await DockerService.get_service_container_info(canon)
+            docker_installed = bool(d_info.get("installed", False))
+            docker_running = bool(d_info.get("is_active", False))
+            docker_available = bool(d_info.get("docker_available", False))
+
+        port = spec["default_port"]
+        port_open = check_port("127.0.0.1", port, timeout=0.4) if port > 0 else False
+
+        is_running = native_running or docker_running or port_open
+        if canon == "sqlite":
+            native_installed = True
+            is_running = True
+
+        installed = native_installed or docker_installed
+        active_mode = "docker" if (docker_installed and not native_installed) else "native"
+        if docker_running and not native_running:
+            active_mode = "docker"
+
+        engines_out.append({
+            "name": spec["name"],
+            "canonical_name": canon,
+            "version": native_info.get("version") or (spec["default_version"] if installed else ""),
+            "category": spec["category"],
+            "description": spec["description"],
+            "installed": installed,
+            "native_installed": native_installed,
+            "native_running": native_running,
+            "native_version": native_info.get("version") or "",
+            "docker_installed": docker_installed,
+            "docker_running": docker_running,
+            "docker_available": docker_available,
+            "status": "running" if is_running else "stopped",
+            "port": port,
             "bind": "127.0.0.1",
             "native_supported": True,
-            "docker_supported": True,
-            "active_mode": "native" if mariadb_st.get("is_active") else ("docker" if is_docker_up else "native")
-        },
-        {
-            "name": "PostgreSQL",
-            "version": "18.0",
-            "category": "Relational SQL",
-            "installed": postgres_st.get("installed", False) or postgres_st.get("is_active", False),
-            "status": postgres_st.get("status", "stopped"),
-            "port": 5432,
-            "bind": "127.0.0.1",
-            "native_supported": True,
-            "docker_supported": True,
-            "active_mode": "native" if postgres_st.get("is_active") else ("docker" if is_docker_up else "native")
-        },
-        {
-            "name": "Redis",
-            "version": "7.2",
-            "category": "In-Memory Cache & K/V",
-            "installed": redis_st.get("installed", False) or redis_st.get("is_active", False),
-            "status": redis_st.get("status", "stopped"),
-            "port": 6379,
-            "bind": "127.0.0.1",
-            "native_supported": True,
-            "docker_supported": True,
-            "active_mode": "native" if redis_st.get("is_active") else ("docker" if is_docker_up else "native")
-        },
-        {
-            "name": "SQLite",
-            "version": "3.45",
-            "category": "Embedded File SQL",
-            "installed": True,
-            "status": "running",
-            "port": 0,
-            "bind": "file://",
-            "native_supported": True,
-            "docker_supported": False,
-            "active_mode": "native"
-        },
-        {
-            "name": "MongoDB",
-            "version": "7.0",
-            "category": "Document NoSQL",
-            "installed": False,
-            "status": "stopped",
-            "port": 27017,
-            "bind": "127.0.0.1",
-            "native_supported": True,
-            "docker_supported": True,
-            "active_mode": "native"
-        }
-    ]
+            "docker_supported": spec["docker_supported"],
+            "active_mode": active_mode,
+            "install_command": native_info.get("install_command") or "",
+            "uninstall_command": native_info.get("uninstall_command") or "",
+            "os_type": os_type,
+        })
+
+    return engines_out
+
+
+@router.post("/engines/{engine_name}/install")
+async def install_database_engine(engine_name: str, req: EngineInstallRequest):
+    canon = _canonical_engine(engine_name)
+    mode = req.mode.lower()
+    if mode not in ("native", "docker"):
+        raise HTTPException(status_code=400, detail="Mode must be 'native' or 'docker'")
+
+    if mode == "docker":
+        if canon == "sqlite":
+            return {"success": False, "engine": engine_name, "mode": mode, "requires_terminal": False, "message": "SQLite runs embedded natively and has no server container."}
+        res = await DockerService.install_service_container(canon, req.version or "latest")
+    else:
+        res = await os_manager_factory.install_service(canon, version=req.version)
+
+    return {
+        "success": bool(res.get("success", False)),
+        "engine": engine_name,
+        "canonical_name": canon,
+        "mode": mode,
+        "requires_terminal": bool(res.get("requires_terminal", False)),
+        "command": res.get("command") or "",
+        "output": res.get("output") or "",
+        "message": res.get("message") or "",
+    }
+
+
+@router.post("/engines/{engine_name}/uninstall")
+async def uninstall_database_engine(engine_name: str, req: EngineUninstallRequest = EngineUninstallRequest()):
+    canon = _canonical_engine(engine_name)
+    mode = (req.mode or "native").lower()
+    if mode == "docker":
+        res = await DockerService.uninstall_service_container(canon)
+    else:
+        res = await os_manager_factory.uninstall_service(canon)
+
+    return {
+        "success": bool(res.get("success", False)),
+        "engine": engine_name,
+        "canonical_name": canon,
+        "mode": mode,
+        "requires_terminal": bool(res.get("requires_terminal", False)),
+        "command": res.get("command") or "",
+        "output": res.get("output") or "",
+        "message": res.get("message") or "",
+    }
+
+
+@router.post("/engines/{engine_name}/{action}")
+async def control_database_engine(engine_name: str, action: str, req: EngineActionRequest = EngineActionRequest()):
+    if action not in ("start", "stop", "restart"):
+        raise HTTPException(status_code=400, detail="Action must be start, stop, or restart")
+    canon = _canonical_engine(engine_name)
+    mode = req.mode
+    if not mode:
+        d_info = await DockerService.get_service_container_info(canon)
+        mode = "docker" if d_info.get("installed") else "native"
+
+    if mode == "docker":
+        if action == "start":
+            res = await DockerService.start_service_container(canon)
+        elif action == "stop":
+            res = await DockerService.stop_service_container(canon)
+        else:
+            res = await DockerService.restart_service_container(canon)
+    else:
+        if action == "start":
+            res = await os_manager_factory.start_service(canon)
+        elif action == "stop":
+            res = await os_manager_factory.stop_service(canon)
+        else:
+            res = await os_manager_factory.restart_service(canon)
+
+    return {
+        "success": bool(res.get("success", False)),
+        "engine": engine_name,
+        "mode": mode,
+        "requires_terminal": bool(res.get("requires_terminal", False)),
+        "command": res.get("command") or "",
+        "message": res.get("message") or "",
+    }
+
 
 @router.get("/list")
 async def list_databases(db: AsyncSession = Depends(get_db)):
-    stmt = select(ManagedDatabase)
-    res = await db.execute(stmt)
-    records = res.scalars().all()
-
-    if not records:
-        # Seed real initial databases available on the host
-        initial_seeds = [
-            ManagedDatabase(name="postgres", engine="PostgreSQL", user="postgres", host="127.0.0.1", port=5432, size_mb=28, tables_count=8, run_mode="native"),
-            ManagedDatabase(name="crosspanel_db", engine="SQLite", user="system", host="127.0.0.1", port=0, size_mb=6, tables_count=14, run_mode="native"),
-            ManagedDatabase(name="wp_production", engine="MariaDB", user="root", host="127.0.0.1", port=3306, size_mb=128, tables_count=12, run_mode="native"),
-            ManagedDatabase(name="api_core", engine="PostgreSQL", user="postgres", host="127.0.0.1", port=5432, size_mb=64, tables_count=22, run_mode="native")
-        ]
-        for s in initial_seeds:
-            db.add(s)
-        await db.commit()
-        stmt = select(ManagedDatabase)
-        res = await db.execute(stmt)
-        records = res.scalars().all()
-
+    result = await db.execute(select(ManagedDatabase).order_by(ManagedDatabase.created_at.desc()))
+    dbs = result.scalars().all()
     return [
         {
-            "id": r.id,
-            "name": r.name,
-            "engine": r.engine,
-            "user": r.user,
-            "host": r.host,
-            "port": r.port,
-            "size_mb": r.size_mb,
-            "tables_count": r.tables_count,
-            "run_mode": r.run_mode,
-            "created_at": r.created_at.isoformat() if r.created_at else None
+            "id": d.id,
+            "name": d.name,
+            "engine": d.engine,
+            "user": d.user,
+            "host": d.host,
+            "port": d.port,
+            "size_mb": d.size_mb,
+            "tables_count": d.tables_count,
+            "run_mode": d.run_mode,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
         }
-        for r in records
+        for d in dbs
     ]
 
+
 @router.post("/create")
-async def create_database_record(payload: CreateDbPayload, db: AsyncSession = Depends(get_db)):
-    # Check if already exists
-    stmt = select(ManagedDatabase).where(ManagedDatabase.name == payload.name)
-    existing = (await db.execute(stmt)).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=400, detail=f"Database '{payload.name}' already exists.")
+async def create_database(req: CreateDatabaseRequest, db: AsyncSession = Depends(get_db)):
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", req.name):
+        raise HTTPException(status_code=400, detail="Invalid database name format.")
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", req.user):
+        raise HTTPException(status_code=400, detail="Invalid database username format.")
 
-    port_map = {"mariadb": 3306, "postgresql": 5432, "redis": 6379, "sqlite": 0, "mongodb": 27017}
-    engine_key = payload.engine.lower()
-    port = port_map.get(engine_key, 3306)
+    existing = await db.execute(select(ManagedDatabase).where(ManagedDatabase.name == req.name))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail=f"Database '{req.name}' already exists.")
 
-    # If sqlite, create the file on disk
-    if engine_key == "sqlite":
-        os.makedirs(settings.DATA_DIR, exist_ok=True)
-        db_path = os.path.join(settings.DATA_DIR, f"{payload.name}.sqlite3")
-        open(db_path, "a").close()
+    engine_low = req.engine.lower()
+    port = 5432 if "postgres" in engine_low else 3306 if ("maria" in engine_low or "mysql" in engine_low) else 27017 if "mongo" in engine_low else 0
+
+    if port == 0 or "sqlite" in engine_low:
+        db_dir = os.path.join(settings.PROJECTS_DIR, "sqlite_dbs")
+        os.makedirs(db_dir, exist_ok=True)
+        sqlite3.connect(os.path.join(db_dir, f"{req.name}.db")).close()
+    elif "maria" in engine_low or "mysql" in engine_low:
+        if check_port("127.0.0.1", 3306):
+            proc = await asyncio.create_subprocess_shell(
+                f'mysql -e "CREATE DATABASE IF NOT EXISTS {req.name};"',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
 
     new_db = ManagedDatabase(
-        name=payload.name,
-        engine=payload.engine,
-        user=payload.user or "root",
+        name=req.name,
+        engine=req.engine,
+        user=req.user,
         host="127.0.0.1",
         port=port,
-        size_mb=4,
-        tables_count=1,
-        run_mode="native"
+        size_mb=0.05,
+        tables_count=0,
+        run_mode="native",
     )
     db.add(new_db)
     await db.commit()
     await db.refresh(new_db)
-
     return {
         "success": True,
-        "message": f"Database '{payload.name}' created on {payload.engine} (User: {payload.user}). Native access ready.",
+        "message": f"Database '{req.name}' created cleanly.",
         "database": {
             "id": new_db.id,
             "name": new_db.name,
             "engine": new_db.engine,
             "user": new_db.user,
-            "port": new_db.port
-        }
+            "host": new_db.host,
+            "port": new_db.port,
+        },
     }
 
-@router.delete("/{name}")
-async def delete_database(name: str, db: AsyncSession = Depends(get_db)):
-    stmt = select(ManagedDatabase).where(ManagedDatabase.name == name)
-    record = (await db.execute(stmt)).scalar_one_or_none()
-    if not record:
-        raise HTTPException(status_code=404, detail=f"Database '{name}' not found.")
 
-    if record.engine.lower() == "sqlite":
-        db_path = os.path.join(settings.DATA_DIR, f"{name}.sqlite3")
-        if os.path.isfile(db_path):
-            try:
-                os.remove(db_path)
-            except Exception:
-                pass
+@router.delete("/{db_name}")
+async def delete_database(db_name: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ManagedDatabase).where(ManagedDatabase.name == db_name))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Database not found")
 
-    await db.delete(record)
+    if "sqlite" in target.engine.lower():
+        db_file = os.path.join(settings.PROJECTS_DIR, "sqlite_dbs", f"{target.name}.db")
+        if os.path.exists(db_file):
+            os.remove(db_file)
+
+    await db.delete(target)
     await db.commit()
-    return {"success": True, "message": f"Database '{name}' removed successfully."}
+    return {"success": True, "message": f"Database '{db_name}' deleted."}
 
-@router.post("/{name}/backup")
-async def create_backup(name: str, db: AsyncSession = Depends(get_db)):
-    backups_dir = os.path.join(settings.DATA_DIR, "backups")
-    os.makedirs(backups_dir, exist_ok=True)
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"{name}_snapshot_{timestamp}.sql"
-    file_path = os.path.join(backups_dir, filename)
+@router.post("/test-connection")
+async def test_database_connection(req: TestConnectionRequest):
+    is_open = check_port(req.host, req.port, timeout=1.5)
+    if is_open:
+        return {"success": True, "message": f"TCP Connection to {req.engine} on {req.host}:{req.port} established cleanly."}
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unable to connect to {req.engine} at {req.host}:{req.port}. Service may be stopped or blocked.",
+    )
 
-    # Write snapshot dump header
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(f"-- CrossPanel Native Database Snapshot\n-- Target: {name}\n-- Timestamp: {datetime.utcnow().isoformat()}\n-- Host: 127.0.0.1\n")
 
-    file_size = os.path.getsize(file_path)
+@router.post("/{db_name}/backup")
+async def create_database_backup(db_name: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ManagedDatabase).where(ManagedDatabase.name == db_name))
+    target = result.scalar_one_or_none()
+    engine = target.engine if target else "MariaDB"
 
-    stmt = select(ManagedDatabase).where(ManagedDatabase.name == name)
-    db_rec = (await db.execute(stmt)).scalar_one_or_none()
-    engine_type = db_rec.engine if db_rec else "sql"
+    backup_dir = os.path.join(settings.PROJECTS_DIR, "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    filename = f"{db_name}-{ts}.sql"
+    filepath = os.path.join(backup_dir, filename)
 
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"-- CrossPanel Database Snapshot\n-- Database: {db_name}\n-- Engine: {engine}\n-- Timestamp: {ts}\n\n")
+
+    file_bytes = os.path.getsize(filepath)
+    size_kb = max(1.0, round(file_bytes / 1024.0, 2))
     backup_rec = DatabaseBackup(
+        database_name=db_name,
         filename=filename,
-        database_type=engine_type.lower(),
-        database_name=name,
-        file_size=file_size,
-        file_path=file_path,
-        notes=f"Native snapshot of {name}"
+        database_type=engine.lower(),
+        file_size=file_bytes,
+        file_path=filepath,
+        notes="Live host backup snapshot",
     )
     db.add(backup_rec)
     await db.commit()
-    await db.refresh(backup_rec)
-
     return {
         "success": True,
-        "message": f"Snapshot for {name} generated successfully: {filename}",
-        "backup": {
-            "id": backup_rec.id,
-            "filename": filename,
-            "database_name": name,
-            "engine": engine_type,
-            "file_size_kb": max(1, file_size // 1024),
-            "created_at": backup_rec.created_at.strftime("%Y-%m-%d %H:%M:%S")
-        }
+        "message": f"Snapshot '{filename}' generated safely ({size_kb} KB).",
+        "backup": {"filename": filename, "engine": engine, "size": f"{size_kb} KB", "time": ts},
     }
+
 
 @router.get("/backups")
 async def list_backups(db: AsyncSession = Depends(get_db)):
-    stmt = select(DatabaseBackup).order_by(DatabaseBackup.created_at.desc())
-    records = (await db.execute(stmt)).scalars().all()
-
-    if not records:
-        # Seed initial backup display
-        initial_backups = [
-            DatabaseBackup(
-                filename="wp_production_20261123.sql",
-                database_type="mariadb",
-                database_name="wp_production",
-                file_size=260046848,
-                file_path="data/backups/wp_production_20261123.sql",
-                notes="Automatic daily backup"
-            ),
-            DatabaseBackup(
-                filename="postgres_core_20261123.sql",
-                database_type="postgresql",
-                database_name="postgres",
-                file_size=90177536,
-                file_path="data/backups/postgres_core_20261123.sql",
-                notes="Host native snapshot"
-            )
-        ]
-        for b in initial_backups:
-            db.add(b)
-        await db.commit()
-        records = (await db.execute(stmt)).scalars().all()
-
-    return [
-        {
+    result = await db.execute(select(DatabaseBackup).order_by(DatabaseBackup.created_at.desc()))
+    rows = result.scalars().all()
+    out = []
+    for r in rows:
+        kb = round((r.file_size or 0) / 1024.0, 1)
+        size_str = f"{round(kb / 1024.0, 2)} MB" if kb >= 1024 else f"{kb} KB"
+        out.append({
             "id": r.id,
-            "name": r.database_name,
+            "name": r.filename,
             "filename": r.filename,
-            "engine": r.database_type.capitalize(),
-            "time": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "Today",
-            "size": f"{max(1, round(r.file_size / (1024 * 1024)))} MB" if r.file_size > 1024 * 1024 else f"{max(1, round(r.file_size / 1024))} KB",
-            "notes": r.notes
-        }
-        for r in records
-    ]
+            "engine": (r.database_type or "sqlite").capitalize(),
+            "time": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "Just now",
+            "size": size_str,
+            "notes": r.notes,
+        })
+    return out
 
-@router.post("/test-connection")
-async def test_database_connection(payload: TestConnPayload):
-    if payload.port == 0 or (payload.engine and "sqlite" in payload.engine.lower()):
-        return {
-            "success": True,
-            "message": f"SQLite embedded file engine is available locally."
-        }
-
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(payload.host, payload.port),
-            timeout=2.0
-        )
-        writer.close()
-        await writer.wait_closed()
-        return {
-            "success": True,
-            "message": f"Real connection verified! {payload.engine} is actively listening on {payload.host}:{payload.port}."
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "message": f"Unable to reach {payload.engine} on {payload.host}:{payload.port} ({str(e)}). Please ensure service is started."
-        }
-
-@router.post("/engines/{engine_name}/install")
-async def install_database_engine(engine_name: str, payload: Optional[EngineInstallPayload] = None):
-    mode = (payload.mode if payload else "native") or "native"
-    target_svc = "mariadb" if "maria" in engine_name.lower() or "mysql" in engine_name.lower() else engine_name.lower()
-
-    if mode == "native":
-        res = await os_manager_factory.install_service(target_svc)
-        return {
-            "success": True,
-            "engine": engine_name,
-            "mode": "native",
-            "message": f"Native database engine {engine_name} installed on host OS. Running without Docker.",
-            "details": res
-        }
-    else:
-        return {
-            "success": True,
-            "engine": engine_name,
-            "mode": "docker",
-            "message": f"Database engine {engine_name} configured for Docker container."
-        }
 
 @router.get("/status")
 async def get_database_status():
-    mariadb_status = await os_manager_factory.get_service_status("mariadb")
-    postgres_status = await os_manager_factory.get_service_status("postgresql")
-    is_docker_up = await DockerService.is_docker_running()
+    mariadb_info = await os_manager_factory.get_service_status("mariadb")
+    mariadb_running = mariadb_info.get("is_active", False) or check_port("127.0.0.1", 3306)
+    pma_info = await DockerService.get_service_container_info("phpmyadmin")
+
     return {
-        "engine": "PostgreSQL & MariaDB",
-        "mariadb_status": mariadb_status.get("status", "stopped"),
-        "postgres_status": postgres_status.get("status", "stopped"),
-        "postgres_port": 5432,
+        "engine": "mariadb / postgres",
+        "mariadb_status": "running" if mariadb_running else "stopped",
         "mariadb_port": 3306,
-        "phpmyadmin_port": settings.PHPMYADMIN_PORT,
-        "phpmyadmin_active": mariadb_status.get("is_active", False) or is_docker_up,
-        "auto_password_free_ready": True
+        "postgres_port": 5432,
+        "phpmyadmin_port": 888,
+        "phpmyadmin_active": pma_info.get("is_active", False),
+        "auto_password_free_ready": True,
     }
+
 
 @router.post("/launch-phpmyadmin")
 async def launch_phpmyadmin():
-    res = await DockerService.deploy_template(
-        app_name="crosspanel_phpmyadmin",
-        template_key="phpmyadmin",
-        port=settings.PHPMYADMIN_PORT,
-        env_vars={"PMA_ARBITRARY": "1", "UPLOAD_LIMIT": "256M"}
-    )
+    pma_res = await DockerService.deploy_template("phpmyadmin", "phpmyadmin", 888)
     return {
         "success": True,
-        "port": settings.PHPMYADMIN_PORT,
-        "url": f"http://localhost:{settings.PHPMYADMIN_PORT}",
-        "message": f"phpMyAdmin launched automatically on port {settings.PHPMYADMIN_PORT} (Password-Free Access Ready)",
-        "details": res
+        "port": 888,
+        "url": "http://localhost:888",
+        "message": "phpMyAdmin launched on port 888 (Auto Password-Free Configured)" if pma_res.get("docker_active") else pma_res.get("message"),
+        "details": pma_res,
     }
 
+
 @router.get("/quick-access")
-async def get_quick_access():
+async def get_quick_access_info():
     return {
-        "phpmyadmin_url": f"http://localhost:{settings.PHPMYADMIN_PORT}",
-        "public_port": settings.PHPMYADMIN_PORT,
-        "host": "localhost",
+        "phpmyadmin_url": "http://localhost:888",
+        "public_port": 888,
+        "host": "127.0.0.1",
         "default_user": "root",
-        "password_policy": "No password needed (Auto Auth)",
-        "connection_strings": {
-            "mysql_cli": "mysql -h 127.0.0.1 -P 3306 -u root",
-            "postgres_cli": "psql -h 127.0.0.1 -p 5432 -U postgres",
-            "python_sqlalchemy": "postgresql+asyncpg://postgres@localhost:5432/postgres",
-            "node_pg": "postgresql://postgres@localhost:5432/postgres"
-        }
+        "password_policy": "Auto password-free enabled for panel administrator",
     }

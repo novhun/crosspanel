@@ -24,6 +24,41 @@ export interface DatabaseBackupRecord {
   notes?: string;
 }
 
+export interface LiveDatabaseEngine {
+  name: string;
+  canonical_name: string;
+  version: string;
+  category: string;
+  description: string;
+  installed: boolean;
+  native_installed: boolean;
+  native_running: boolean;
+  native_version: string;
+  docker_installed: boolean;
+  docker_running: boolean;
+  docker_available: boolean;
+  status: string;
+  port: number;
+  bind: string;
+  native_supported: boolean;
+  docker_supported: boolean;
+  active_mode: "native" | "docker";
+  install_command: string;
+  uninstall_command: string;
+  os_type: string;
+}
+
+export interface EngineActionResponse {
+  success: boolean;
+  engine: string;
+  canonical_name?: string;
+  mode: string;
+  requires_terminal?: boolean;
+  command?: string;
+  output?: string;
+  message: string;
+}
+
 export const databaseApi = {
   getStatus: () => apiClient.get<DatabaseStatus>("/database/status"),
 
@@ -38,21 +73,7 @@ export const databaseApi = {
       password_policy: string;
     }>("/database/quick-access"),
 
-  getEngines: () =>
-    apiClient.get<
-      Array<{
-        name: string;
-        version: string;
-        category: string;
-        installed: boolean;
-        status: string;
-        port: number;
-        bind: string;
-        native_supported: boolean;
-        docker_supported: boolean;
-        active_mode: "native" | "docker";
-      }>
-    >("/database/engines"),
+  getEngines: () => apiClient.get<LiveDatabaseEngine[]>("/database/engines"),
 
   list: () => apiClient.get<ManagedDatabaseRecord[]>("/database/list"),
 
@@ -72,9 +93,21 @@ export const databaseApi = {
     }),
 
   installEngine: (engineName: string, mode?: "native" | "docker", version?: string) =>
-    apiClient.post<{ success: boolean; engine: string; mode: string; message: string }>(
-      `/database/engines/${engineName}/install`,
+    apiClient.post<EngineActionResponse>(
+      `/database/engines/${encodeURIComponent(engineName)}/install`,
       { mode: mode || "native", version: version || "latest" }
+    ),
+
+  uninstallEngine: (engineName: string, mode?: "native" | "docker") =>
+    apiClient.post<EngineActionResponse>(
+      `/database/engines/${encodeURIComponent(engineName)}/uninstall`,
+      { mode: mode || "native" }
+    ),
+
+  controlEngine: (engineName: string, action: "start" | "stop" | "restart", mode?: "native" | "docker") =>
+    apiClient.post<EngineActionResponse>(
+      `/database/engines/${encodeURIComponent(engineName)}/${action}`,
+      { mode }
     ),
 
   createDatabase: (payload: { name: string; engine?: string; user?: string; password?: string }) =>
@@ -83,4 +116,3 @@ export const databaseApi = {
       payload
     ),
 };
-

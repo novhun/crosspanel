@@ -1,6 +1,6 @@
 import asyncio
 import platform
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class MacCommands:
     SERVICE_MAP = {
@@ -9,90 +9,56 @@ class MacCommands:
         "mariadb": "mariadb",
         "docker": "docker",
         "redis": "redis",
-        "postgresql": "postgresql@15"
+        "postgresql": "postgresql@16"
     }
 
     @classmethod
     async def run_sh(cls, cmd: str) -> Dict[str, Any]:
         try:
-            if platform.system() == "Darwin":
-                proc = await asyncio.create_subprocess_shell(
-                    cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                return {
-                    "success": proc.returncode == 0,
-                    "stdout": stdout.decode("utf-8", errors="ignore").strip(),
-                    "stderr": stderr.decode("utf-8", errors="ignore").strip(),
-                    "exit_code": proc.returncode
-                }
-            else:
-                return {
-                    "success": True,
-                    "stdout": f"[macOS Brew Sim] Command executed: {cmd}",
-                    "stderr": "",
-                    "exit_code": 0
-                }
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            return {
+                "success": proc.returncode == 0,
+                "stdout": stdout.decode("utf-8", errors="ignore").strip(),
+                "stderr": stderr.decode("utf-8", errors="ignore").strip(),
+                "exit_code": proc.returncode
+            }
         except Exception as e:
             return {"success": False, "stdout": "", "stderr": str(e), "exit_code": -1}
 
     @classmethod
     async def get_service_status(cls, service_name: str) -> Dict[str, Any]:
-        brew_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"brew services info {brew_svc} --json"
-        res = await cls.run_sh(cmd)
-        is_active = "started" in res["stdout"] or "running" in res["stdout"]
-        return {
-            "name": service_name,
-            "system_name": brew_svc,
-            "status": "running" if is_active else "stopped",
-            "is_active": is_active,
-            "installed": True
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.detect_package(service_name)
 
     @classmethod
     async def start_service(cls, service_name: str) -> Dict[str, Any]:
-        brew_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"brew services start {brew_svc}"
-        res = await cls.run_sh(cmd)
-        return {
-            "success": res["success"],
-            "message": f"Service {service_name} started via brew services" if res["success"] else res["stderr"]
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.control_service(service_name, "start")
 
     @classmethod
     async def stop_service(cls, service_name: str) -> Dict[str, Any]:
-        brew_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"brew services stop {brew_svc}"
-        res = await cls.run_sh(cmd)
-        return {
-            "success": res["success"],
-            "message": f"Service {service_name} stopped via brew services" if res["success"] else res["stderr"]
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.control_service(service_name, "stop")
 
     @classmethod
     async def restart_service(cls, service_name: str) -> Dict[str, Any]:
-        brew_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"brew services restart {brew_svc}"
-        res = await cls.run_sh(cmd)
-        return {
-            "success": res["success"],
-            "message": f"Service {service_name} restarted via brew services" if res["success"] else res["stderr"]
-        }
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.control_service(service_name, "restart")
 
     @classmethod
-    async def install_service(cls, service_name: str) -> Dict[str, Any]:
-        brew_svc = cls.SERVICE_MAP.get(service_name.lower(), service_name)
-        cmd = f"brew install {brew_svc} && brew services start {brew_svc}"
-        res = await cls.run_sh(cmd)
-        return {
-            "success": res["success"],
-            "package": brew_svc,
-            "manager": "homebrew",
-            "message": f"Native package {service_name} ({brew_svc}) installed via Homebrew." if res["success"] else res["stderr"]
-        }
+    async def install_service(cls, service_name: str, version: Optional[str] = None) -> Dict[str, Any]:
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.install_package(service_name, version=version)
+
+    @classmethod
+    async def uninstall_service(cls, service_name: str) -> Dict[str, Any]:
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.uninstall_package(service_name)
 
     @classmethod
     async def get_firewall_rules(cls) -> List[Dict[str, Any]]:

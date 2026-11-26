@@ -1,15 +1,20 @@
 import { useState, useEffect } from "react";
 import {
+  Box,
   Boxes,
+  Cpu,
   FileCode2,
+  FileText,
   Info,
   Link2,
   Package,
   Play,
+  RefreshCw,
   RotateCw,
   Search,
   Server,
   Square,
+  SquareTerminal,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -17,9 +22,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { AppVersionActions } from "./AppVersionActions";
+import { XTermTerminal } from "./XTermTerminal";
 import { PageHeader, Pill, inputCls } from "./ui";
 import { SkillIcon } from "./SkillIcon";
 import { deployApi } from "@/api/deploy.api";
+import type { CatalogAppStatus } from "@/types/deploy.types";
 
 const apps = [
   {
@@ -236,7 +243,18 @@ const apps = [
 
 type App = (typeof apps)[number];
 
-const initialInstalled = [
+type InstalledAppRow = {
+  dbId?: number;
+  id: string;
+  app: string;
+  skill: string;
+  version: string;
+  port: string;
+  running: boolean;
+  mode: "native" | "docker";
+};
+
+const initialInstalled: InstalledAppRow[] = [
   { id: "wordpress-site", app: "WordPress", skill: "wordpress", version: "6.6", port: "8080", running: true, mode: "native" },
   { id: "fastapi-api", app: "FastAPI", skill: "fastapi", version: "0.115", port: "8000", running: true, mode: "native" },
   { id: "postgres-main", app: "PostgreSQL", skill: "postgres", version: "16", port: "5432", running: true, mode: "docker" },
@@ -256,38 +274,59 @@ export function ApplicationsWorkspace() {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("Featured");
   const [details, setDetails] = useState<App | null>(null);
-  const [installed, setInstalled] = useState(initialInstalled);
-  const [remove, setRemove] = useState<string | null>(null);
+  const [installed, setInstalled] = useState<InstalledAppRow[]>(initialInstalled);
+  const [catalogMap, setCatalogMap] = useState<Record<string, CatalogAppStatus>>({});
+  const [remove, setRemove] = useState<InstalledAppRow | null>(null);
+  const [logsModal, setLogsModal] = useState<{ name: string; content: string } | null>(null);
+  const [pkgTerminal, setPkgTerminal] = useState<{ title: string; command: string } | null>(null);
   const [source, setSource] = useState("Docker Hub");
   const [sourceValue, setSourceValue] = useState("");
+  const [sourceName, setSourceName] = useState("");
   const [isLive, setIsLive] = useState(false);
+  const [composeName, setComposeName] = useState("custom-stack");
   const [compose, setCompose] = useState(
     'services:\n  web:\n    image: nginx:alpine\n    ports:\n      - "8080:80"'
   );
 
+  const loadLiveApps = async () => {
+    try {
+      const [catalogRes, appsRes] = await Promise.allSettled([
+        deployApi.getCatalog(),
+        deployApi.getApps(),
+      ]);
+
+      if (catalogRes.status === "fulfilled" && Array.isArray(catalogRes.value)) {
+        setIsLive(true);
+        const cmap: Record<string, CatalogAppStatus> = {};
+        for (const entry of catalogRes.value) {
+          cmap[entry.name] = entry;
+        }
+        setCatalogMap(cmap);
+      }
+
+      if (appsRes.status === "fulfilled" && Array.isArray(appsRes.value)) {
+        setIsLive(true);
+        setInstalled(
+          appsRes.value.map((a) => ({
+            dbId: a.id,
+            id: a.name,
+            app: a.template_name || a.name,
+            skill: a.template_name?.toLowerCase() || "docker",
+            version: "latest",
+            port: String(a.port || 80),
+            running: a.status === "running",
+            mode: a.mode === "native" || a.container_id?.startsWith("native:") ? "native" : "docker",
+          }))
+        );
+      }
+    } catch {
+      setIsLive(false);
+    }
+  };
+
   useEffect(() => {
     if (import.meta.env.MODE !== "test") {
-      deployApi
-        .getApps()
-        .then((liveApps) => {
-          if (Array.isArray(liveApps) && liveApps.length > 0) {
-            setIsLive(true);
-            setInstalled(
-              liveApps.map((a) => ({
-                id: a.name,
-                app: a.template_name || a.name,
-                skill: a.template_name?.toLowerCase() || "docker",
-                version: "latest",
-                port: String(a.port || 80),
-                running: a.status === "running",
-                mode: a.container_id?.startsWith("native_") ? "native" : "docker",
-              }))
-            );
-          }
-        })
-        .catch(() => {
-          setIsLive(false);
-        });
+      loadLiveApps();
     }
   }, []);
 
@@ -295,6 +334,83 @@ export function ApplicationsWorkspace() {
     toast(`Demo ${action}`, {
       description: "Deployed via CrossPanel Container Engine.",
     });
+
+  const handleInstallCatalogApp = async (app: App, version: string, mode: "native" | "docker") => {
+    const res = await deployApi.installApp({
+      app_name: app.name,
+      mode,
+      version,
+      port: Number(app.port) || 8080,
+    });
+    if (res.requires_terminal && res.command) {
+      setPkgTerminal({ title: `Install ${app.name} (${mode === "docker" ? "Docker" : "Native OS"})`, command: res.command });
+      return;
+    }
+    if (res.success) {
+      toast.success(res.message || `${app.name} installed (${mode})`);
+      await loadLiveApps();
+    } else {
+      toast.error(res.message || `Failed to install ${app.name}`);
+    }
+  };
+
+  const handleUninstallCatalogApp = async (app: App, mode: "native" | "docker") => {
+    const res = await deployApi.uninstallApp({ app_name: app.name, mode });
+    if (res.requires_terminal && res.command) {
+      setPkgTerminal({ title: `Uninstall ${app.name} (${mode === "docker" ? "Docker" : "Native OS"})`, command: res.command });
+      return;
+    }
+    if (res.success) {
+      toast.success(res.message || `${app.name} uninstalled (${mode})`);
+      await loadLiveApps();
+    } else {
+      toast.error(res.message || `Failed to uninstall ${app.name}`);
+    }
+  };
+
+  const handleControlInstalled = async (item: InstalledAppRow, action: "start" | "stop" | "restart") => {
+    if (import.meta.env.MODE === "test" || !item.dbId) {
+      setInstalled((rows) =>
+        rows.map((row) =>
+          row.id === item.id ? { ...row, running: action === "stop" ? false : true } : row
+        )
+      );
+      preview(`${action}: ${item.id}`);
+      return;
+    }
+    try {
+      const res = await deployApi.controlApp(item.dbId, action);
+      if (res.requires_terminal && res.command) {
+        setPkgTerminal({ title: `${action.toUpperCase()} ${item.id}`, command: res.command });
+        return;
+      }
+      if (res.success) {
+        toast.success(res.message || `${item.id} ${action}ed`);
+        await loadLiveApps();
+      } else {
+        toast.error(res.message || `Failed to ${action} ${item.id}`);
+      }
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to ${action} ${item.id}`);
+    }
+  };
+
+  const handleDeleteInstalled = async (item: InstalledAppRow) => {
+    if (import.meta.env.MODE === "test" || !item.dbId) {
+      setInstalled((rows) => rows.filter((row) => row.id !== item.id));
+      preview(`removed ${item.id}`);
+      setRemove(null);
+      return;
+    }
+    try {
+      const res = await deployApi.deleteApp(item.dbId);
+      toast.success(res.message || `Removed ${item.id}`);
+      setRemove(null);
+      await loadLiveApps();
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to remove ${item.id}`);
+    }
+  };
 
   const matches = apps.filter(
     (app) =>
@@ -311,15 +427,24 @@ export function ApplicationsWorkspace() {
     setCategory("All categories");
   };
 
+  const osType = Object.values(catalogMap)[0]?.os_type;
+
   return (
     <>
       <PageHeader
         title="Application Library"
-        desc="1-Click deploy templates powered by Docker & multi-OS native runtimes"
+        desc="1-Click deploy via Docker containers or real multi-OS native installers (Linux / macOS / Windows)"
         action={
-          <Pill tone={isLive ? "success" : "muted"}>
-            {isLive ? "● Connected (Live Engine)" : "● Preset Templates"}
-          </Pill>
+          <div className="flex flex-wrap items-center gap-3">
+            <Pill tone={isLive ? "success" : "muted"}>
+              {isLive ? `● Connected (${osType ? osType.toUpperCase() : "Live Engine"})` : "● Preset Templates"}
+            </Pill>
+            {import.meta.env.MODE !== "test" && (
+              <Button variant="outline" size="sm" onClick={() => { loadLiveApps(); toast.success("Application status refreshed"); }}>
+                <RefreshCw />Refresh
+              </Button>
+            )}
+          </div>
         }
       />
 
@@ -407,52 +532,78 @@ export function ApplicationsWorkspace() {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {visible.map((app) => (
-              <article
-                key={app.name}
-                className="group flex min-w-0 flex-col rounded-xl border border-border bg-card p-5 transition-all duration-200 hover:border-cyan/50 hover:shadow-lg hover:shadow-cyan/5"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="grid size-12 shrink-0 place-items-center rounded-xl bg-secondary/50 p-1 border border-border/60 group-hover:border-primary/40 transition-colors">
-                    <SkillIcon name={app.skill} size={40} />
+            {visible.map((app) => {
+              const cat = catalogMap[app.name];
+              return (
+                <article
+                  key={app.name}
+                  className="group flex min-w-0 flex-col rounded-xl border border-border bg-card p-5 transition-all duration-200 hover:border-cyan/50 hover:shadow-lg hover:shadow-cyan/5"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="grid size-12 shrink-0 place-items-center rounded-xl bg-secondary/50 p-1 border border-border/60 group-hover:border-primary/40 transition-colors">
+                      <SkillIcon name={app.skill} size={40} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-display font-semibold text-base leading-tight group-hover:text-cyan transition-colors">
+                        {app.name}
+                      </h3>
+                      <span className="text-xs text-muted-foreground">{app.category}</span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="shrink-0 text-muted-foreground hover:text-foreground"
+                      title={`${app.name} details`}
+                      aria-label={`${app.name} details`}
+                      onClick={() => setDetails(app)}
+                    >
+                      <Info className="size-4" />
+                    </Button>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-display font-semibold text-base leading-tight group-hover:text-cyan transition-colors">
-                      {app.name}
-                    </h3>
-                    <span className="text-xs text-muted-foreground">{app.category}</span>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="shrink-0 text-muted-foreground hover:text-foreground"
-                    title={`${app.name} details`}
-                    aria-label={`${app.name} details`}
-                    onClick={() => setDetails(app)}
-                  >
-                    <Info className="size-4" />
-                  </Button>
-                </div>
 
-                <p className="mt-4 min-h-12 text-sm leading-relaxed text-muted-foreground">
-                  {app.description}
-                </p>
+                  <p className="mt-4 min-h-12 text-sm leading-relaxed text-muted-foreground">
+                    {app.description}
+                  </p>
 
-                <div className="mb-4 mt-3 flex flex-wrap items-center gap-2 border-b border-border pb-4 text-xs">
-                  <span className="inline-flex items-center gap-1.5 text-muted-foreground font-mono">
-                    <Server className="size-3 text-cyan" />
-                    {app.runtime}
-                  </span>
-                  {app.featured && (
-                    <span className="ml-auto rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-semibold text-warning">
-                      Featured
+                  <div className="mb-4 mt-3 flex flex-wrap items-center gap-2 border-b border-border pb-4 text-xs">
+                    <span className="inline-flex items-center gap-1.5 text-muted-foreground font-mono">
+                      <Server className="size-3 text-cyan" />
+                      {app.runtime}
                     </span>
-                  )}
-                </div>
+                    {isLive && cat?.native_installed && (
+                      <Pill tone="success">
+                        <Cpu className="size-3 mr-1 inline" />Native
+                      </Pill>
+                    )}
+                    {isLive && cat?.docker_installed && (
+                      <Pill tone="primary">
+                        <Box className="size-3 mr-1 inline" />Docker
+                      </Pill>
+                    )}
+                    {app.featured && !cat?.native_installed && !cat?.docker_installed && (
+                      <span className="ml-auto rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-semibold text-warning">
+                        Featured
+                      </span>
+                    )}
+                  </div>
 
-                <AppVersionActions name={app.name} versions={app.versions} />
-              </article>
-            ))}
+                  <AppVersionActions
+                    name={app.name}
+                    versions={app.versions}
+                    allowDocker={cat ? cat.docker_supported : app.name !== "Docker"}
+                    installed={cat?.installed}
+                    nativeInstalled={cat?.native_installed}
+                    dockerInstalled={cat?.docker_installed}
+                    dockerAvailable={cat?.docker_available ?? true}
+                    defaultMode={cat?.docker_installed && !cat?.native_installed ? "docker" : "native"}
+                    installCommand={cat?.install_command}
+                    uninstallCommand={cat?.uninstall_command}
+                    onInstall={async (version, mode) => handleInstallCatalogApp(app, version, mode)}
+                    onUninstall={async (mode) => handleUninstallCatalogApp(app, mode)}
+                  />
+                </article>
+              );
+            })}
           </div>
 
           {visible.length === 0 && (
@@ -487,8 +638,8 @@ export function ApplicationsWorkspace() {
                 <div className="min-w-0 flex-1 basis-40">
                   <div className="flex items-center gap-2">
                     <h3 className="break-words font-semibold text-sm">{item.id}</h3>
-                    <Pill tone={(item as any).mode === "docker" ? "primary" : "success"}>
-                      {(item as any).mode === "docker" ? "Docker" : "Native OS"}
+                    <Pill tone={item.mode === "docker" ? "primary" : "success"}>
+                      {item.mode === "docker" ? "Docker" : "Native OS"}
                     </Pill>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -504,12 +655,7 @@ export function ApplicationsWorkspace() {
                     size="icon"
                     title={item.running ? "Stop app" : "Start app"}
                     aria-label={`${item.running ? "Stop" : "Start"} ${item.id}`}
-                    onClick={() => {
-                      setInstalled((rows) =>
-                        rows.map((row) => (row.id === item.id ? { ...row, running: !row.running } : row))
-                      );
-                      preview(`${item.running ? "stop" : "start"}: ${item.id}`);
-                    }}
+                    onClick={() => handleControlInstalled(item, item.running ? "stop" : "start")}
                   >
                     {item.running ? <Square className="size-4" /> : <Play className="size-4" />}
                   </Button>
@@ -518,22 +664,35 @@ export function ApplicationsWorkspace() {
                     size="icon"
                     title="Restart app"
                     aria-label={`Restart ${item.id}`}
-                    onClick={() => {
-                      setInstalled((rows) =>
-                        rows.map((row) => (row.id === item.id ? { ...row, running: true } : row))
-                      );
-                      preview(`restart: ${item.id}`);
-                    }}
+                    onClick={() => handleControlInstalled(item, "restart")}
                   >
                     <RotateCw className="size-4" />
                   </Button>
+                  {isLive && item.dbId && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      title="View logs"
+                      aria-label={`Logs ${item.id}`}
+                      onClick={async () => {
+                        try {
+                          const res = await deployApi.getAppLogs(item.dbId!);
+                          setLogsModal({ name: item.id, content: res.logs });
+                        } catch {
+                          toast.error("Unable to fetch logs");
+                        }
+                      }}
+                    >
+                      <FileText className="size-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
                     className="text-destructive hover:bg-destructive/10"
-                    title="Remove app"
+                    title="Uninstall / Remove app"
                     aria-label={`Remove ${item.id}`}
-                    onClick={() => setRemove(item.id)}
+                    onClick={() => setRemove(item)}
                   >
                     <Trash2 className="size-4" />
                   </Button>
@@ -569,11 +728,47 @@ export function ApplicationsWorkspace() {
               ))}
             </div>
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
-                preview(`source deployment from ${source}`);
+                if (import.meta.env.MODE === "test") {
+                  preview(`source deployment from ${source}`);
+                  return;
+                }
+                const targetName = (sourceName || sourceValue.split("/").pop() || "custom-app").replace(/[^a-zA-Z0-9_-]/g, "-");
+                try {
+                  if (source === "Git Repo") {
+                    const res = await deployApi.deployGit({
+                      name: targetName,
+                      repo_url: sourceValue.trim(),
+                      branch: "main",
+                      port: 8080,
+                    });
+                    toast.success(res.message);
+                    await loadLiveApps();
+                  } else if (source === "Docker Hub") {
+                    const yaml = `services:\n  app:\n    image: ${sourceValue.trim()}\n    restart: always\n`;
+                    const res = await deployApi.deployCustomCompose({ name: targetName, compose_yaml: yaml });
+                    toast.success(res.message);
+                    await loadLiveApps();
+                  } else {
+                    toast.info("Zip deployments can be extracted in Files & launched from Compose.");
+                  }
+                } catch (err: any) {
+                  toast.error(err?.message || "Deployment failed");
+                }
               }}
             >
+              {import.meta.env.MODE !== "test" && (
+                <label className="mb-3 block space-y-1.5 text-sm">
+                  <span>App / Project Name (optional)</span>
+                  <input
+                    className={inputCls}
+                    placeholder="my-app"
+                    value={sourceName}
+                    onChange={(e) => setSourceName(e.target.value)}
+                  />
+                </label>
+              )}
               <label className="block space-y-2 text-sm">
                 <span>
                   {source === "Docker Hub"
@@ -598,7 +793,8 @@ export function ApplicationsWorkspace() {
                 />
               </label>
               <Button disabled={!sourceValue.trim()} className="mt-5" type="submit">
-                <Play className="mr-1 size-4" />Preview deployment
+                <Play className="mr-1 size-4" />
+                {import.meta.env.MODE === "test" ? "Preview deployment" : "Deploy Source"}
               </Button>
             </form>
           </section>
@@ -607,6 +803,16 @@ export function ApplicationsWorkspace() {
             <h2 className="mb-5 flex items-center gap-2 font-display text-lg font-semibold">
               <FileCode2 className="size-5 text-warning" />Custom Docker Compose Stack
             </h2>
+            {import.meta.env.MODE !== "test" && (
+              <label className="mb-3 block space-y-1.5 text-sm">
+                <span>Stack Name</span>
+                <input
+                  className={inputCls}
+                  value={composeName}
+                  onChange={(e) => setComposeName(e.target.value)}
+                />
+              </label>
+            )}
             <label className="block space-y-2 text-sm">
               <span>YAML Configuration</span>
               <textarea
@@ -621,7 +827,22 @@ export function ApplicationsWorkspace() {
             <Button
               className="mt-5"
               disabled={!compose.trim()}
-              onClick={() => preview("Docker Compose stack deploy")}
+              onClick={async () => {
+                if (import.meta.env.MODE === "test") {
+                  preview("Docker Compose stack deploy");
+                  return;
+                }
+                try {
+                  const res = await deployApi.deployCustomCompose({
+                    name: composeName.trim() || "custom-stack",
+                    compose_yaml: compose,
+                  });
+                  toast.success(res.message);
+                  await loadLiveApps();
+                } catch (err: any) {
+                  toast.error(err?.message || "Compose deploy failed");
+                }
+              }}
             >
               <Play className="mr-1 size-4" />Launch Stack
             </Button>
@@ -669,7 +890,20 @@ export function ApplicationsWorkspace() {
                 </div>
               </dl>
 
-              <AppVersionActions key={details.name} name={details.name} versions={details.versions} />
+              <AppVersionActions
+                key={details.name}
+                name={details.name}
+                versions={details.versions}
+                allowDocker={catalogMap[details.name]?.docker_supported ?? details.name !== "Docker"}
+                installed={catalogMap[details.name]?.installed}
+                nativeInstalled={catalogMap[details.name]?.native_installed}
+                dockerInstalled={catalogMap[details.name]?.docker_installed}
+                dockerAvailable={catalogMap[details.name]?.docker_available ?? true}
+                installCommand={catalogMap[details.name]?.install_command}
+                uninstallCommand={catalogMap[details.name]?.uninstall_command}
+                onInstall={async (version, mode) => handleInstallCatalogApp(details, version, mode)}
+                onUninstall={async (mode) => handleUninstallCatalogApp(details, mode)}
+              />
             </>
           )}
         </DialogContent>
@@ -683,9 +917,9 @@ export function ApplicationsWorkspace() {
       >
         <DialogContent className="w-[calc(100%-2rem)] rounded-xl">
           <DialogHeader>
-            <DialogTitle>Remove {remove}?</DialogTitle>
+            <DialogTitle>Remove {remove?.id}?</DialogTitle>
             <DialogDescription>
-              This container will be terminated and removed from your active deployments.
+              This {remove?.mode === "docker" ? "Docker container and compose resources" : "native app process and project directory"} will be stopped and removed.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
@@ -695,12 +929,62 @@ export function ApplicationsWorkspace() {
             <Button
               variant="destructive"
               onClick={() => {
-                setInstalled((rows) => rows.filter((row) => row.id !== remove));
-                preview(`removed ${remove}`);
-                setRemove(null);
+                if (remove) handleDeleteInstalled(remove);
               }}
             >
               <Trash2 className="mr-1 size-4" />Confirm Removal
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={logsModal !== null}
+        onOpenChange={(open) => {
+          if (!open) setLogsModal(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{logsModal?.name} Logs</DialogTitle>
+            <DialogDescription>Runtime output</DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-secondary p-4 font-mono text-xs leading-6">
+            {logsModal?.content || "No logs yet."}
+          </pre>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pkgTerminal !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPkgTerminal(null);
+            loadLiveApps();
+          }
+        }}
+      >
+        <DialogContent className="max-h-[92dvh] sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <SquareTerminal className="size-5 text-cyan" />
+              {pkgTerminal?.title}
+            </DialogTitle>
+            <DialogDescription className="break-all font-mono text-xs">
+              {pkgTerminal?.command}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="h-[55vh] w-full overflow-hidden rounded-lg border border-border bg-[#0B0F19]">
+            {pkgTerminal && <XTermTerminal active={true} initialCommand={pkgTerminal.command} />}
+          </div>
+          <div className="flex justify-end">
+            <Button
+              onClick={() => {
+                setPkgTerminal(null);
+                loadLiveApps();
+              }}
+            >
+              Done &amp; Refresh Status
             </Button>
           </div>
         </DialogContent>

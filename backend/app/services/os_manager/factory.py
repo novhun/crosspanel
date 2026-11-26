@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from app.core.config import settings
 from app.services.os_manager.base_os import BaseOSManager
 from app.services.os_manager.windows.system import WindowsSystemMonitor
@@ -66,14 +66,27 @@ class UnifiedOSManager(BaseOSManager):
         else:
             return await LinuxCommands.restart_service(service_name)
 
-    async def install_service(self, service_name: str) -> Dict[str, Any]:
+    async def install_service(self, service_name: str, version: Optional[str] = None) -> Dict[str, Any]:
         os_type = self.os_name
         if os_type == "windows":
-            return await WindowsCommands.install_service(service_name)
+            return await WindowsCommands.install_service(service_name, version=version)
         elif os_type == "mac":
-            return await MacCommands.install_service(service_name)
+            return await MacCommands.install_service(service_name, version=version)
         else:
-            return await LinuxCommands.install_service(service_name)
+            return await LinuxCommands.install_service(service_name, version=version)
+
+    async def uninstall_service(self, service_name: str) -> Dict[str, Any]:
+        os_type = self.os_name
+        if os_type == "windows":
+            return await WindowsCommands.uninstall_service(service_name)
+        elif os_type == "mac":
+            return await MacCommands.uninstall_service(service_name)
+        else:
+            return await LinuxCommands.uninstall_service(service_name)
+
+    async def get_service_logs(self, service_name: str, lines: int = 80) -> str:
+        from app.services.package_manager import PackageManagerService
+        return await PackageManagerService.get_service_logs(service_name, lines=lines)
 
     async def list_services(self) -> List[Dict[str, Any]]:
         services = ["nginx", "php-fpm", "mariadb", "docker"]
