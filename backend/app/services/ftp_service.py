@@ -569,9 +569,9 @@ FTP_PACKAGE_CATALOG: Dict[str, Dict[str, Any]] = {
         "display_name": "vsftpd",
         "description": "Very Secure FTP Daemon — fast, lightweight Linux FTP & FTPS server",
         "default_port": 21,
+        "os_support": {"linux"},
         "apt_pkg": "vsftpd",
         "dnf_pkg": "vsftpd",
-        "brew_pkg": "vsftpd",
         "service_names": ["vsftpd"],
         "binaries": ["vsftpd"],
     },
@@ -580,9 +580,9 @@ FTP_PACKAGE_CATALOG: Dict[str, Dict[str, Any]] = {
         "display_name": "ProFTPD",
         "description": "Configurable FTP, FTPS, and SFTP daemon with virtual-host style config",
         "default_port": 21,
+        "os_support": {"linux"},
         "apt_pkg": "proftpd-core",
         "dnf_pkg": "proftpd",
-        "brew_pkg": "proftpd",
         "service_names": ["proftpd"],
         "binaries": ["proftpd"],
     },
@@ -591,6 +591,7 @@ FTP_PACKAGE_CATALOG: Dict[str, Dict[str, Any]] = {
         "display_name": "Pure-FTPd",
         "description": "Security-focused FTP daemon with chroot & virtual user support",
         "default_port": 21,
+        "os_support": {"linux", "darwin"},
         "apt_pkg": "pure-ftpd",
         "dnf_pkg": "pure-ftpd",
         "brew_pkg": "pure-ftpd",
@@ -602,11 +603,33 @@ FTP_PACKAGE_CATALOG: Dict[str, Dict[str, Any]] = {
         "display_name": "OpenSSH SFTP Server",
         "description": "Standard SSH & encrypted SFTP subsystem (port 22)",
         "default_port": 22,
+        "os_support": {"linux", "darwin", "windows"},
         "apt_pkg": "openssh-server",
         "dnf_pkg": "openssh-server",
         "brew_pkg": "openssh",
+        "win_capability": "OpenSSH.Server~~~~0.0.1.0",
         "service_names": ["ssh", "sshd"],
-        "binaries": ["sshd"],
+        "binaries": ["sshd", "sshd.exe"],
+    },
+    "filezilla-server": {
+        "name": "filezilla-server",
+        "display_name": "FileZilla Server",
+        "description": "Cross-platform FTP / FTPS server for Windows via winget",
+        "default_port": 21,
+        "os_support": {"windows"},
+        "winget_id": "TimKosse.FileZilla.Server",
+        "service_names": ["filezilla-server"],
+        "binaries": ["filezilla-server.exe"],
+    },
+    "iis-ftp": {
+        "name": "iis-ftp",
+        "display_name": "Windows IIS FTP Server",
+        "description": "Built-in Microsoft IIS FTP service (ftpsvc) for Windows",
+        "default_port": 21,
+        "os_support": {"windows"},
+        "win_feature": "IIS-FTPServer",
+        "service_names": ["ftpsvc"],
+        "binaries": [],
     },
 }
 
@@ -683,11 +706,41 @@ class FtpPackageService:
         }
 
     @classmethod
+    async def _detect_windows_pkg(cls, spec: Dict[str, Any]) -> Dict[str, Any]:
+        installed = False
+        running = False
+        svc_name = spec["service_names"][0]
+        binary_path = cls._find_binary(spec["binaries"]) or ""
+
+        rc, out, _ = await cls._run_shell(
+            f'powershell -NoProfile -Command "(Get-Service -Name {svc_name} -ErrorAction SilentlyContinue).Status"'
+        )
+        if rc == 0 and out:
+            installed = True
+            running = out.strip().lower() == "running"
+        elif spec.get("winget_id"):
+            w_rc, w_out, _ = await cls._run_shell(f'winget list --id {spec["winget_id"]} -e')
+            installed = w_rc == 0 and spec["winget_id"] in w_out
+        elif binary_path:
+            installed = True
+
+        return {
+            "installed": installed,
+            "running": running,
+            "version": "",
+            "service_name": svc_name,
+            "binary_path": binary_path,
+        }
+
+    @classmethod
     async def list_packages(cls) -> List[Dict[str, Any]]:
         os_name = platform.system().lower()
         results: List[Dict[str, Any]] = []
 
         for key, spec in FTP_PACKAGE_CATALOG.items():
+            if os_name not in spec.get("os_support", {"linux"}):
+                continue
+
             if os_name == "linux":
                 info = await cls._detect_linux_pkg(spec)
                 install_cmd = (
@@ -716,18 +769,21 @@ class FtpPackageService:
                     "binary_path": cls._find_binary(spec["binaries"]) or "",
                 }
                 install_cmd = f"brew install {spec['brew_pkg']}"
-                uninstall_cmd = f"brew uninstall {spec['brew_pkg']}"
+                uninstall_cmd = f"brew services stop {spec['brew_pkg']} 2>/dev/null || true; brew uninstall {spec['brew_pkg']}"
             else:
-                binary_path = cls._find_binary(spec["binaries"])
-                info = {
-                    "installed": bool(binary_path),
-                    "running": False,
-                    "version": "",
-                    "service_name": spec["service_names"][0],
-                    "binary_path": binary_path or "",
-                }
-                install_cmd = f"winget install {key}"
-                uninstall_cmd = f"winget uninstall {key}"
+                info = await cls._detect_windows_pkg(spec)
+                if spec.get("win_capability"):
+                    cap = spec["win_capability"]
+                    install_cmd = f'powershell -NoProfile -Command "Add-WindowsCapability -Online -Name {cap}"'
+                    uninstall_cmd = f'powershell -NoProfile -Command "Stop-Service {info["service_name"]} -ErrorAction SilentlyContinue; Remove-WindowsCapability -Online -Name {cap}"'
+                elif spec.get("win_feature"):
+                    feat = spec["win_feature"]
+                    install_cmd = f"dism /Online /Enable-Feature /FeatureName:{feat} /All"
+                    uninstall_cmd = f"dism /Online /Disable-Feature /FeatureName:{feat}"
+                else:
+                    wid = spec.get("winget_id", key)
+                    install_cmd = f"winget install --id {wid} -e --accept-package-agreements --accept-source-agreements"
+                    uninstall_cmd = f"winget uninstall --id {wid} -e"
 
             results.append({
                 "name": spec["name"],
@@ -834,6 +890,8 @@ class FtpPackageService:
             raise ValueError(f"Unsupported FTP/SFTP server package: {pkg_name}")
 
         os_name = platform.system().lower()
+        if os_name not in spec.get("os_support", {"linux"}):
+            raise ValueError(f"{spec['display_name']} is not available on {os_name}.")
         if os_name == "linux":
             info = await cls._detect_linux_pkg(spec)
             svc = info["service_name"]
@@ -879,6 +937,34 @@ class FtpPackageService:
             else:
                 raise ValueError(f"Unsupported action: {action}")
             res = await cls._run_privileged(cmd)
+            res["packages"] = await cls.list_packages()
+            return res
+
+        if os_name == "windows":
+            svc = spec["service_names"][0]
+            if action == "install":
+                if spec.get("win_capability"):
+                    cmd = f'powershell -NoProfile -Command "Add-WindowsCapability -Online -Name {spec["win_capability"]}"'
+                elif spec.get("win_feature"):
+                    cmd = f"dism /Online /Enable-Feature /FeatureName:{spec['win_feature']} /All"
+                else:
+                    cmd = f'winget install --id {spec["winget_id"]} -e --accept-package-agreements --accept-source-agreements'
+            elif action == "uninstall":
+                if spec.get("win_capability"):
+                    cmd = f'powershell -NoProfile -Command "Stop-Service {svc} -ErrorAction SilentlyContinue; Remove-WindowsCapability -Online -Name {spec["win_capability"]}"'
+                elif spec.get("win_feature"):
+                    cmd = f"dism /Online /Disable-Feature /FeatureName:{spec['win_feature']}"
+                else:
+                    cmd = f'winget uninstall --id {spec["winget_id"]} -e'
+            elif action in ("start", "stop", "restart"):
+                ps_verb = {"start": "Start-Service", "stop": "Stop-Service", "restart": "Restart-Service"}[action]
+                cmd = f'powershell -NoProfile -Command "{ps_verb} {svc}"'
+            else:
+                raise ValueError(f"Unsupported action: {action}")
+
+            res = await cls._run_privileged(cmd)
+            if not res["success"]:
+                res["requires_terminal"] = True
             res["packages"] = await cls.list_packages()
             return res
 
