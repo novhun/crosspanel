@@ -142,9 +142,11 @@ class ManagedDatabase(Base):
     user = Column(String(100), default="root")
     host = Column(String(100), default="127.0.0.1")
     port = Column(Integer, default=3306)
-    size_mb = Column(Integer, default=12)
-    tables_count = Column(Integer, default=4)
+    size_mb = Column(Integer, default=0)
+    tables_count = Column(Integer, default=0)
     run_mode = Column(String(20), default="native") # native or docker
+    db_password = Column(String(255), nullable=True, default="")
+    connection_string = Column(String(512), nullable=True, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
