@@ -221,6 +221,13 @@ def cleanup() -> None:
                         proc.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         proc.kill()
+                    if hasattr(os, "killpg"):
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        except Exception:
+                            pass
         except Exception:
             pass
     CHILD_PROCESSES.clear()
@@ -230,6 +237,14 @@ def cleanup() -> None:
 def start_backend(port: int = 8000) -> subprocess.Popen:
     """Launch FastAPI backend if not already running."""
     if is_port_in_use(port):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/files/trash", timeout=1.0) as resp:
+                if resp.status == 200:
+                    log("INFO", f"Backend already running on port {port}.")
+                    return None
+        except Exception:
+            log("WARN", f"Port {port} is occupied by an older backend instance; restart uvicorn on port {port} to load latest API routes.")
+            return None
         log("INFO", f"Backend already running on port {port}.")
         return None
 
@@ -250,6 +265,7 @@ def start_backend(port: int = 8000) -> subprocess.Popen:
         "0.0.0.0",
         "--port",
         str(port),
+        "--reload",
     ]
 
     proc = subprocess.Popen(
@@ -258,6 +274,7 @@ def start_backend(port: int = 8000) -> subprocess.Popen:
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=not IS_WINDOWS,
     )
     CHILD_PROCESSES.append(proc)
     return proc
@@ -281,6 +298,7 @@ def start_frontend(port: int = 5173) -> subprocess.Popen:
         cwd=str(FRONTEND_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=not IS_WINDOWS,
     )
     CHILD_PROCESSES.append(proc)
     return proc
@@ -864,6 +882,40 @@ def _configure_linux_qt_env() -> None:
         os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
 
 
+def _patch_pywebview_qt_permissions() -> None:
+    """Fix PyWebView 6.x + PyQt6 TypeError when QWebEnginePage passes int instead of PermissionPolicy."""
+    try:
+        from qtpy import PYQT6
+        if not PYQT6:
+            return
+        from qtpy.QtWebEngineWidgets import QWebEnginePage
+        from webview.platforms import qt as pwv_qt
+
+        if not getattr(pwv_qt, "is_webengine", False):
+            return
+
+        allowed = {
+            QWebEnginePage.Feature.MediaAudioCapture,
+            QWebEnginePage.Feature.MediaVideoCapture,
+            QWebEnginePage.Feature.MediaAudioVideoCapture,
+        }
+        clipboard_feat = getattr(QWebEnginePage.Feature, "ClipboardReadWrite", None)
+        if clipboard_feat is not None:
+            allowed.add(clipboard_feat)
+
+        def _safe_on_feature_permission_requested(self, url, feature):
+            policy = (
+                QWebEnginePage.PermissionPolicy.PermissionGrantedByUser
+                if feature in allowed
+                else QWebEnginePage.PermissionPolicy.PermissionDeniedByUser
+            )
+            self.setFeaturePermission(url, feature, policy)
+
+        pwv_qt.BrowserView.WebPage.onFeaturePermissionRequested = _safe_on_feature_permission_requested
+    except Exception as e:
+        log("WARN", f"Could not apply PyQt6 permission patch: {e}")
+
+
 def on_gui_ready():
     """Invoked immediately after GUI window loop initializes."""
     time.sleep(0.1)
@@ -961,6 +1013,7 @@ def main():
     if IS_LINUX and importlib.util.find_spec("gi") is None and importlib.util.find_spec("qtpy") is not None:
         selected_gui = "qt"
         _configure_linux_qt_env()
+        _patch_pywebview_qt_permissions()
 
     # Start PyWebView Event Loop with native menu, icon, and OS icon injector
     try:

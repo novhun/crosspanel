@@ -6,3 +6,4 @@ export * from "./tunnel.api";
 export * from "./database.api";
 export * from "./docker.api";
 export * from "./auth.api";
+export * from "./files.api";

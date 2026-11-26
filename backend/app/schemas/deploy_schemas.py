@@ -68,13 +68,32 @@ class FileItem(BaseModel):
     size: int
     modified: str
     permissions: str
+    owner: str = "user"
+    is_symlink: bool = False
 
 class FileWriteRequest(BaseModel):
     path: str
     content: str
+    create_only: bool = False
 
 class FileMkdirRequest(BaseModel):
     path: str
+
+class FileDeleteRequest(BaseModel):
+    path: Optional[str] = None
+    paths: Optional[List[str]] = None
+    permanent: bool = False
+
+class FileTrashIdsRequest(BaseModel):
+    trash_ids: List[str]
+
+class FileRenameRequest(BaseModel):
+    old_path: str
+    new_path: str
+
+class FileTransferRequest(BaseModel):
+    source_paths: List[str]
+    destination_dir: str
 
 class FileZipRequest(BaseModel):
     source_path: str
