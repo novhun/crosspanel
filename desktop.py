@@ -18,6 +18,7 @@ import argparse
 import atexit
 import functools
 import importlib.metadata
+import importlib.util
 import os
 import platform
 import shutil
@@ -38,14 +39,21 @@ try:
 except ImportError:
     print("[INFO] 'pywebview' is not installed. Installing automatically...")
     try:
-        import subprocess
+        if importlib.util.find_spec("pip") is None:
+            if importlib.util.find_spec("ensurepip") is not None:
+                subprocess.check_call([sys.executable, "-m", "ensurepip", "--upgrade"])
+            else:
+                raise RuntimeError(
+                    f"No module named 'pip' or 'ensurepip' in {sys.executable}. "
+                    "On Ubuntu/Debian run: sudo apt update && sudo apt install -y python3-pip python3-venv"
+                )
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pywebview"])
         import webview
         from webview.menu import Menu, MenuAction, MenuSeparator
         print("[SUCCESS] 'pywebview' installed successfully.")
     except Exception as e:
         print(f"[ERROR] 'pywebview' is not installed and auto-installation failed: {e}")
-        print("Please install it by running: pip install pywebview")
+        print("Please install pywebview (e.g. 'pip install pywebview' or via your OS package manager).")
         sys.exit(1)
 
 # Application Paths
@@ -97,8 +105,7 @@ def get_python_executable() -> str:
 def get_npm_executable() -> str:
     """Locate npm command."""
     cmd = "npm.cmd" if IS_WINDOWS else "npm"
-    which = shutil.which(cmd)
-    return which if which else "npm"
+    return shutil.which(cmd) or ""
 
 
 def get_native_app_icon() -> str:
@@ -223,9 +230,12 @@ def start_frontend(port: int = 5173) -> subprocess.Popen:
         log("INFO", f"Frontend already running on port {port}.")
         return None
 
-    log("INFO", f"Starting Frontend dev server on port {port}...")
     npm_exe = get_npm_executable()
+    if not npm_exe:
+        log("ERROR", "Node.js / npm was not found in PATH. Please install Node.js 18+ to start the frontend.")
+        return None
 
+    log("INFO", f"Starting Frontend dev server on port {port}...")
     cmd = [npm_exe, "run", "dev", "--", "--port", str(port)]
     proc = subprocess.Popen(
         cmd,

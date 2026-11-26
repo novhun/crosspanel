@@ -23,7 +23,11 @@ if [ ! -f "venv/bin/python" ]; then
     fi
 
     echo "[INFO] Creating virtual environment using $PY_CMD..."
-    "$PY_CMD" -m venv venv
+    VENV_ARGS=""
+    if [ "$(uname -s)" = "Linux" ]; then
+        VENV_ARGS="--system-site-packages"
+    fi
+    "$PY_CMD" -m venv $VENV_ARGS venv
 
     echo "[INFO] Upgrading pip..."
     ./venv/bin/python -m pip install --upgrade pip

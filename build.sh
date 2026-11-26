@@ -83,7 +83,11 @@ build_backend() {
 
     if [ ! -d "venv" ]; then
         log_info "Creating Python virtual environment using $PY_CMD..."
-        "$PY_CMD" -m venv venv
+        VENV_ARGS=""
+        if [ "$(uname -s)" = "Linux" ]; then
+            VENV_ARGS="--system-site-packages"
+        fi
+        "$PY_CMD" -m venv $VENV_ARGS venv
     fi
 
     log_info "Upgrading pip and installing requirements from requirements.txt..."
