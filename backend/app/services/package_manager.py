@@ -377,7 +377,7 @@ class PackageManagerService:
             }
 
         if shutil.which("pkexec") and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-            res = await cls.run_exec(["pkexec", "bash", "-c", inner_cmd], timeout=timeout)
+            res = await cls.run_exec(["pkexec", "--disable-internal-agent", "bash", "-c", inner_cmd], timeout=timeout)
             if res["success"]:
                 return {
                     "success": True,

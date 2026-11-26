@@ -95,19 +95,22 @@ export const databaseApi = {
   installEngine: (engineName: string, mode?: "native" | "docker", version?: string) =>
     apiClient.post<EngineActionResponse>(
       `/database/engines/${encodeURIComponent(engineName)}/install`,
-      { mode: mode || "native", version: version || "latest" }
+      { mode: mode || "native", version: version || "latest" },
+      { timeoutMs: 300000 }
     ),
 
   uninstallEngine: (engineName: string, mode?: "native" | "docker") =>
     apiClient.post<EngineActionResponse>(
       `/database/engines/${encodeURIComponent(engineName)}/uninstall`,
-      { mode: mode || "native" }
+      { mode: mode || "native" },
+      { timeoutMs: 300000 }
     ),
 
   controlEngine: (engineName: string, action: "start" | "stop" | "restart", mode?: "native" | "docker") =>
     apiClient.post<EngineActionResponse>(
       `/database/engines/${encodeURIComponent(engineName)}/${action}`,
-      { mode }
+      { mode },
+      { timeoutMs: 120000 }
     ),
 
   createDatabase: (payload: { name: string; engine?: string; user?: string; password?: string }) =>
