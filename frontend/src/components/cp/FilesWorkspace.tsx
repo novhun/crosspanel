@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Archive,
   ArrowDown,
@@ -8,6 +8,7 @@ import {
   Clipboard,
   Copy,
   Download,
+  Eraser,
   FilePlus,
   FileText,
   FileWarning,
@@ -28,6 +29,7 @@ import {
   Save,
   Scissors,
   Search,
+  SquareTerminal,
   Trash2,
   Upload,
   ZoomIn,
@@ -36,6 +38,7 @@ import {
 import { toast } from "sonner";
 import { filesApi } from "@/api/files.api";
 import type { OsPlaceItem, OsTrashItem } from "@/types/files.types";
+import { XTermTerminal, type XTermActions } from "./XTermTerminal";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -264,6 +267,24 @@ export function FilesWorkspace() {
   const [unsupportedFile, setUnsupportedFile] = useState<{ entry: WorkspaceEntry; reason: string }>();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [terminalCwd, setTerminalCwd] = useState<string>();
+  const [terminalConnected, setTerminalConnected] = useState(false);
+  const [terminalReconnect, setTerminalReconnect] = useState(0);
+  const terminalActionsRef = useRef<XTermActions | null>(null);
+
+  function openTerminalAt(targetDir?: string) {
+    const resolved = targetDir || (isLive ? currentOsPath : activePathDisplay) || "/";
+    setTerminalConnected(false);
+    setTerminalCwd(resolved);
+  }
+
+  function closeTerminalModal() {
+    setTerminalCwd(undefined);
+    setTerminalConnected(false);
+    if (isLive && !trashMode && currentOsPath) {
+      loadOsDirectory(currentOsPath, false);
+    }
+  }
 
   async function loadOsDirectory(targetPath = "", pushHistory = true) {
     setLoading(true);
@@ -691,6 +712,19 @@ export function FilesWorkspace() {
     if (!entry.directory) {
       items.push({ label: "Download", icon: Download, action: () => handleDownload(entry) });
     }
+    if (entry.directory) {
+      items.push({
+        label: "Open in Terminal",
+        icon: SquareTerminal,
+        action: defer(() => openTerminalAt(entry.realPath || (isLive ? currentOsPath : entryPath(entries, entry.id)))),
+      });
+    } else {
+      items.push({
+        label: "Open Terminal Here",
+        icon: SquareTerminal,
+        action: defer(() => openTerminalAt(isLive ? currentOsPath : activePathDisplay)),
+      });
+    }
     items.push({ label: "Delete", icon: Trash2, action: defer(() => setRemoving([entry])) });
     return items;
   }
@@ -825,6 +859,14 @@ export function FilesWorkspace() {
                 size="sm"
                 variant="ghost"
                 className="ml-auto"
+                onClick={() => openTerminalAt(isLive ? currentOsPath : activePathDisplay)}
+              >
+                <SquareTerminal className="text-cyan" />
+                Terminal
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
                 onClick={openTrashView}
               >
                 <Trash2 className="text-warning" />
@@ -1141,7 +1183,9 @@ export function FilesWorkspace() {
                 })()}
               </>
             ) : (
-              <>
+              <ContextMenu>
+                <ContextMenuTrigger asChild>
+                  <div className="min-h-[380px]">
             <div className="flex items-center gap-3 border-b border-border px-3 py-2 text-xs text-muted-foreground">
               <input
                 aria-label="Select all files"
@@ -1275,7 +1319,39 @@ export function FilesWorkspace() {
                 <p className="text-sm text-muted-foreground">{query ? "No matching files" : "This folder is empty"}</p>
               </div>
             )}
-              </>
+                  </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem onSelect={() => setTimeout(() => openTerminalAt(isLive ? currentOsPath : activePathDisplay), 0)}>
+                    <SquareTerminal className="mr-2 size-4 text-cyan" />
+                    Open Terminal Here
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onSelect={() => setTimeout(() => showDialog("folder"), 0)}>
+                    <FolderPlus className="mr-2 size-4" />
+                    New Folder
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => setTimeout(() => showDialog("file"), 0)}>
+                    <FilePlus className="mr-2 size-4" />
+                    New File
+                  </ContextMenuItem>
+                  {clipboard && (
+                    <ContextMenuItem onSelect={paste}>
+                      <Clipboard className="mr-2 size-4" />
+                      Paste
+                    </ContextMenuItem>
+                  )}
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onSelect={() => {
+                      if (isLive) loadOsDirectory(currentOsPath, false);
+                    }}
+                  >
+                    <RefreshCw className="mr-2 size-4" />
+                    Refresh
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
             )}
           </div>
         </div>
@@ -1880,6 +1956,76 @@ export function FilesWorkspace() {
               <Download />
               Download File
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Embedded Terminal Modal at Current Location */}
+      <Dialog
+        open={terminalCwd !== undefined}
+        onOpenChange={(open) => {
+          if (!open) closeTerminalModal();
+        }}
+      >
+        <DialogContent className="max-h-[92dvh] sm:max-w-5xl">
+          <DialogHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
+              <div>
+                <DialogTitle className="flex items-center gap-2">
+                  <SquareTerminal className="size-5 text-cyan" />
+                  Terminal Session
+                </DialogTitle>
+                <DialogDescription className="mt-1 break-all font-mono text-xs">
+                  cwd: {terminalCwd}
+                </DialogDescription>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Pill tone={terminalConnected ? "success" : "muted"}>
+                  {terminalConnected ? "● Live PTY Connected" : "● Connecting..."}
+                </Pill>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => terminalActionsRef.current?.copySelection()}
+                  title="Copy selected text (Ctrl+Shift+C)"
+                >
+                  <Copy />
+                  Copy
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => terminalActionsRef.current?.clear()}
+                  title="Clear terminal"
+                >
+                  <Eraser />
+                  Clear
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setTerminalReconnect((n) => n + 1)}
+                  title="Reconnect PTY session"
+                >
+                  <RefreshCw />
+                  Reconnect
+                </Button>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="h-[60vh] w-full overflow-hidden rounded-lg border border-border bg-[#0B0F19]">
+            {terminalCwd !== undefined && (
+              <XTermTerminal
+                active={true}
+                cwd={terminalCwd}
+                reconnectNonce={terminalReconnect}
+                onStatusChange={setTerminalConnected}
+                onRegisterActions={(actions) => {
+                  terminalActionsRef.current = actions;
+                }}
+              />
+            )}
           </div>
         </DialogContent>
       </Dialog>
