@@ -36,9 +36,17 @@ try:
     import webview
     from webview.menu import Menu, MenuAction, MenuSeparator
 except ImportError:
-    print("[ERROR] 'pywebview' is not installed.")
-    print("Please install it by running: pip install pywebview")
-    sys.exit(1)
+    print("[INFO] 'pywebview' is not installed. Installing automatically...")
+    try:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pywebview"])
+        import webview
+        from webview.menu import Menu, MenuAction, MenuSeparator
+        print("[SUCCESS] 'pywebview' installed successfully.")
+    except Exception as e:
+        print(f"[ERROR] 'pywebview' is not installed and auto-installation failed: {e}")
+        print("Please install it by running: pip install pywebview")
+        sys.exit(1)
 
 # Application Paths
 ROOT_DIR = Path(__file__).resolve().parent
@@ -236,10 +244,14 @@ class DesktopApi:
     """
 
     def __init__(self):
-        self.window = None
+        self._window = None
 
     def set_window(self, window):
-        self.window = window
+        self._window = window
+
+    def _get_window(self):
+        global _WINDOW_REF
+        return self._window or _WINDOW_REF
 
     def get_desktop_info(self) -> dict:
         """Returns native host and desktop runtime metrics."""
@@ -261,32 +273,37 @@ class DesktopApi:
         }
 
     def minimize_window(self) -> bool:
-        if self.window:
-            self.window.minimize()
+        win = self._get_window()
+        if win:
+            win.minimize()
             return True
         return False
 
     def maximize_window(self) -> bool:
-        if self.window:
-            self.window.maximize()
+        win = self._get_window()
+        if win:
+            win.maximize()
             return True
         return False
 
     def restore_window(self) -> bool:
-        if self.window:
-            self.window.restore()
+        win = self._get_window()
+        if win:
+            win.restore()
             return True
         return False
 
     def toggle_fullscreen(self) -> bool:
-        if self.window:
-            self.window.toggle_fullscreen()
+        win = self._get_window()
+        if win:
+            win.toggle_fullscreen()
             return True
         return False
 
     def close_window(self) -> bool:
-        if self.window:
-            self.window.destroy()
+        win = self._get_window()
+        if win:
+            win.destroy()
             return True
         return False
 
@@ -296,39 +313,51 @@ class DesktopApi:
             return True
         return False
 
-    def select_folder_dialog(self, title: str = "Select Directory") -> str:
-        if not self.window:
+    def select_folder_dialog(self, title: str = "Select Directory", directory: str = "") -> str:
+        win = self._get_window()
+        if not win:
             return ""
-        result = self.window.create_file_dialog(webview.FOLDER_DIALOG, title=title)
-        if result and len(result) > 0:
-            return result[0]
+        try:
+            result = win.create_file_dialog(webview.FOLDER_DIALOG, directory=directory)
+            if result and len(result) > 0:
+                return result[0]
+        except Exception as e:
+            log("ERROR", f"Folder dialog error: {e}")
         return ""
 
-    def select_file_dialog(self, title: str = "Select File", allowed_extensions: str = "*.*") -> str:
-        if not self.window:
+    def select_file_dialog(self, title: str = "Select File", allowed_extensions: str = "*.*", directory: str = "") -> str:
+        win = self._get_window()
+        if not win:
             return ""
-        file_types = (f"Files ({allowed_extensions})",)
-        result = self.window.create_file_dialog(
-            webview.OPEN_DIALOG,
-            title=title,
-            file_types=file_types,
-        )
-        if result and len(result) > 0:
-            return result[0]
+        file_types = (f"Files ({allowed_extensions})",) if allowed_extensions else ()
+        try:
+            result = win.create_file_dialog(
+                webview.OPEN_DIALOG,
+                directory=directory,
+                file_types=file_types,
+            )
+            if result and len(result) > 0:
+                return result[0]
+        except Exception as e:
+            log("ERROR", f"File dialog error: {e}")
         return ""
 
-    def save_file_dialog(self, title: str = "Save File As", default_name: str = "") -> str:
-        if not self.window:
+    def save_file_dialog(self, title: str = "Save File As", default_name: str = "", directory: str = "") -> str:
+        win = self._get_window()
+        if not win:
             return ""
-        result = self.window.create_file_dialog(
-            webview.SAVE_DIALOG,
-            title=title,
-            save_filename=default_name,
-        )
-        if isinstance(result, str):
-            return result
-        elif result and len(result) > 0:
-            return result[0]
+        try:
+            result = win.create_file_dialog(
+                webview.SAVE_DIALOG,
+                directory=directory,
+                save_filename=default_name,
+            )
+            if isinstance(result, str):
+                return result
+            elif result and len(result) > 0:
+                return result[0]
+        except Exception as e:
+            log("ERROR", f"Save file dialog error: {e}")
         return ""
 
 
@@ -370,18 +399,24 @@ def _file_dialog_open():
     """Trigger native file dialog and notify webview."""
     global _WINDOW_REF
     if _WINDOW_REF:
-        res = _WINDOW_REF.create_file_dialog(webview.OPEN_DIALOG, title="Open File")
-        if res and len(res) > 0:
-            log("INFO", f"User selected file: {res[0]}")
+        try:
+            res = _WINDOW_REF.create_file_dialog(webview.OPEN_DIALOG)
+            if res and len(res) > 0:
+                log("INFO", f"User selected file: {res[0]}")
+        except Exception as e:
+            log("ERROR", f"File dialog error: {e}")
 
 
 def _folder_dialog_open():
     """Trigger native folder dialog and notify webview."""
     global _WINDOW_REF
     if _WINDOW_REF:
-        res = _WINDOW_REF.create_file_dialog(webview.FOLDER_DIALOG, title="Select Project Directory")
-        if res and len(res) > 0:
-            log("INFO", f"User selected folder: {res[0]}")
+        try:
+            res = _WINDOW_REF.create_file_dialog(webview.FOLDER_DIALOG)
+            if res and len(res) > 0:
+                log("INFO", f"User selected folder: {res[0]}")
+        except Exception as e:
+            log("ERROR", f"Folder dialog error: {e}")
 
 
 def _show_about():
@@ -525,9 +560,9 @@ def build_native_menu(base_url: str, backend_port: int, frontend_port: int) -> l
 
     # 8. Help Menu
     help_menu = Menu("Help", [
-        MenuAction("CrossPanel Documentation", lambda: _open_url("https://github.com/mrhun/crosspanel#readme")),
-        MenuAction("GitHub Repository", lambda: _open_url("https://github.com/mrhun/crosspanel")),
-        MenuAction("Report an Issue / Feedback", lambda: _open_url("https://github.com/mrhun/crosspanel/issues")),
+        MenuAction("CrossPanel Documentation", lambda: _open_url("https://github.com/novhun/crosspanel#readme")),
+        MenuAction("GitHub Repository", lambda: _open_url("https://github.com/novhun/crosspanel")),
+        MenuAction("Report an Issue / Feedback", lambda: _open_url("https://github.com/novhun/crosspanel/issues")),
         MenuSeparator(),
         MenuAction("About CrossPanel...", _show_about),
     ])

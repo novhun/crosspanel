@@ -24,6 +24,13 @@ if exist "%~dp0backend\venv\Scripts\python.exe" (
     )
 )
 
+:: Ensure pywebview is available
+"%PYTHON%" -c "import webview" >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] Installing required pywebview package...
+    "%PYTHON%" -m pip install pywebview
+)
+
 "%PYTHON%" "%~dp0desktop.py" %*
 
 if errorlevel 1 (
