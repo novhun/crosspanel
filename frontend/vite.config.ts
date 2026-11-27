@@ -8,6 +8,9 @@ export default defineConfig({
     preset: process.env.NITRO_PRESET || "node-server",
   },
   vite: {
+    resolve: {
+      tsconfigPaths: true,
+    },
     server: {
       port: 5173,
       proxy: {

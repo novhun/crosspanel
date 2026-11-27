@@ -53,9 +53,9 @@ if [ ! -f "venv/bin/python" ] || [ ! -f "venv/bin/pip" ]; then
     ./venv/bin/python -m pip install -r requirements.txt
 fi
 
-# Ensure uvicorn is installed in venv
-if [ ! -f "venv/bin/uvicorn" ]; then
-    echo "[INFO] Installing dependencies from requirements.txt..."
+# Ensure uvicorn and required dependencies are installed in venv
+if [ ! -f "venv/bin/uvicorn" ] || ! ./venv/bin/python -c "import fastapi, uvicorn, paramiko, pyftpdlib" >/dev/null 2>&1; then
+    echo "[INFO] Installing / syncing dependencies from requirements.txt..."
     ./venv/bin/python -m pip install -r requirements.txt
 fi
 
